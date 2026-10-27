@@ -41,5 +41,7 @@ Currently focusing on LLM serving system and inference optimization.
 ## Labs
 - [microengine](labs/microengine/README.md): a minimal serving engine
 - [tinyorca](https://github.com/junuxyz/tinyorca): a minimal implementation of [ORCA](https://www.usenix.org/system/files/osdi22-yu.pdf)
+- [nano-vllm-bench](https://github.com/junuxyz/nano-vllm-bench): a performance comparison between nano-vLLM and nano-vLLM-v1
 - [tiny-speculators](https://github.com/junuxyz/tiny-speculators): a from-scratch implementation of speculative decoding model training.
 - [Dynamo Deployment Guide](https://github.com/Prasannajaga/deployment-guide): deployed and benchmarked models including Nemotron Nano and Qwen3 on up to 16× H100 GPUs with experiments spanning P/D disaggregation, KV-aware routing, KV offloading, and replayed multi-turn coding-agent workloads.
+- [MLA Lab](labs/mla-lab/README.md): roofline analysis and H100 experiments comparing MLA weight absorption methods
