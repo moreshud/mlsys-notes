@@ -1,0 +1,221 @@
+<!doctype html>
+<!-- fig-height: 345 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reducing along an axis</title>
+<link rel="stylesheet" href="ds.css?v=13">
+<script src="ds.js?v=10" defer></script>
+<style>
+
+  .fig{width:fit-content; max-width:1040px;}
+  .stage{display:flex; gap:var(--s6); align-items:flex-start; justify-content:center; flex-wrap:nowrap;}
+
+  .track{flex:none;}
+
+  .board{display:grid; width:max-content; gap:3px;}
+
+  .hdr{
+    font-family:var(--mono); font-size:10.5px;
+    display:grid; place-items:center; cursor:pointer;
+    background:transparent; border:1px solid var(--rule-2);
+    border-radius:3px; color:var(--ink-3); padding:0;
+    transition:background .18s, border-color .18s, color .18s;
+  }
+  .hdr:hover{color:var(--ink); border-color:var(--ink-3);}
+  .hdr[aria-pressed="true"]{background:var(--accent-wash); border-color:var(--accent); color:var(--accent-ink);}
+  .corner{}
+
+  .c{
+    border-radius:3px; background:var(--inset); border:1px solid var(--rule);
+    display:grid; place-items:center;
+    font-family:var(--mono); font-size:12px; color:var(--ink-2);
+    font-variant-numeric:tabular-nums;
+    transition:background .26s var(--ease), border-color .26s var(--ease), color .26s var(--ease);
+  }
+  .c.feeding{background:var(--accent-wash); border-color:var(--accent); color:var(--ink);}
+
+  .o{
+    border-radius:3px; border:1.5px solid var(--rule-2); background:var(--panel);
+    display:grid; place-items:center;
+    font-family:var(--mono); font-size:12.5px; color:var(--ink-3);
+    font-variant-numeric:tabular-nums;
+    transition:background .26s var(--ease), border-color .26s var(--ease), color .26s var(--ease), opacity .26s var(--ease);
+  }
+  .o.live{background:var(--accent); border-color:var(--accent); color:var(--panel);}
+  .o.mute{opacity:.3;}
+  .o.hide{visibility:hidden;}
+
+  .shapeline{
+    margin-top:var(--s6);
+    display:flex; align-items:baseline; gap:var(--s3); flex-wrap:wrap;
+    font-family:var(--mono);
+  }
+  .dims{font-size:19px; color:var(--ink); letter-spacing:0.02em;}
+  .dims .d{transition:color .26s var(--ease), opacity .26s var(--ease);}
+  .dims .d.dropped{
+    color:var(--ink-3); opacity:.85;
+    text-decoration:line-through; text-decoration-thickness:2.5px;
+    text-decoration-color:var(--ink-2);
+  }
+  .dims .d.kept{color:var(--accent-ink);}
+  .dims.out{color:var(--accent-ink);}
+  .arrow{font-size:17px; color:var(--ink-3);}
+  .drops{
+    font-family:var(--mono); font-size:11px; color:var(--ink-3);
+    letter-spacing:0.08em; text-transform:uppercase;
+  }
+  .drops em{font-style:normal; color:var(--accent-ink);}
+
+  .side{flex:0 1 240px; min-width:210px;}
+</style>
+</head>
+<body>
+<div class="fig">
+  <div class="fig-head">
+    <div class="fig-label">tl.sum(k_contributions, axis)</div>
+    <div class="ctl-row">
+      <div class="ctl">
+        <span class="k">axis</span>
+        <div class="seg hint" id="segAx">
+          <button data-v="0">0</button><button data-v="1">1</button>
+        </div>
+      </div>
+      <div class="ctl">
+        <span class="k">op</span>
+        <div class="seg" id="segOp">
+          <button data-v="sum">sum</button><button data-v="max">max</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="track">
+      <div class="board" id="board"></div>
+      <div class="shapeline">
+        <span class="dims" id="dimsIn"></span>
+        <span class="arrow">&rarr;</span>
+        <span class="dims out" id="dimsOut"></span>
+        <span class="drops" id="drops"></span>
+      </div>
+    </div>
+    <div class="side"><div class="read" id="read"></div></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var B0=3, B1=4;
+  var DATA=[[1,2,3,4],[10,20,30,40],[5,6,7,8]];
+  var state={ axis:1, op:'sum', k:0 };
+
+  var board=document.getElementById('board'), read=document.getElementById('read'),
+      dimsIn=document.getElementById('dimsIn'), dimsOut=document.getElementById('dimsOut'),
+      drops=document.getElementById('drops'),
+      segAx=document.getElementById('segAx'), segOp=document.getElementById('segOp');
+
+  board.style.gridTemplateColumns='46px repeat('+B1+',52px) 64px';
+  board.style.gridTemplateRows='24px repeat('+B0+',34px) 34px';
+
+  var colHdr=[], rowHdr=[], cells=[], outRight=[], outBottom=[];
+
+  function mk(cls, txt){ var d=document.createElement('div'); d.className=cls; if(txt!=null) d.textContent=txt; return d; }
+  function mkBtn(cls, txt, label){
+    var b=document.createElement('button'); b.className=cls; b.textContent=txt;
+    b.setAttribute('aria-label',label); return b;
+  }
+
+  board.appendChild(mk('corner'));
+  for(var j=0;j<B1;j++){
+    var ch=mkBtn('hdr','col '+j,'reduce down column '+j);
+    (function(k){ ch.addEventListener('click',function(){ state.axis=0; state.k=k; syncSegs(); paint(); }); })(j);
+    board.appendChild(ch); colHdr.push(ch);
+  }
+  board.appendChild(mk('corner'));
+
+  for(var i=0;i<B0;i++){
+    var rh=mkBtn('hdr','row '+i,'reduce across row '+i);
+    (function(k){ rh.addEventListener('click',function(){ state.axis=1; state.k=k; syncSegs(); paint(); }); })(i);
+    board.appendChild(rh); rowHdr.push(rh);
+
+    for(var j2=0;j2<B1;j2++){
+      var c=mk('c', DATA[i][j2]); board.appendChild(c); cells.push(c);
+    }
+    var orr=mk('o',''); board.appendChild(orr); outRight.push(orr);
+  }
+
+  board.appendChild(mk('corner'));
+  for(var j3=0;j3<B1;j3++){ var ob=mk('o',''); board.appendChild(ob); outBottom.push(ob); }
+  board.appendChild(mk('corner'));
+
+  function reduce(vals){
+    return state.op==='sum' ? vals.reduce(function(a,b){return a+b;},0) : Math.max.apply(null,vals);
+  }
+  function colOf(j){ var a=[]; for(var i=0;i<B0;i++) a.push(DATA[i][j]); return a; }
+
+  function paint(){
+    var ax=state.axis;
+    var n = ax===1 ? B0 : B1;
+    if(state.k>=n) state.k=0;
+
+    for(var i=0;i<B0;i++) for(var j=0;j<B1;j++){
+      var feeding = ax===1 ? (i===state.k) : (j===state.k);
+      cells[i*B1+j].classList.toggle('feeding', feeding);
+    }
+
+    for(var r=0;r<B0;r++){
+      outRight[r].textContent=reduce(DATA[r]);
+      outRight[r].classList.toggle('hide', ax!==1);
+      outRight[r].classList.toggle('live', ax===1 && r===state.k);
+      outRight[r].classList.toggle('mute', ax===1 && r!==state.k);
+    }
+    for(var c2=0;c2<B1;c2++){
+      outBottom[c2].textContent=reduce(colOf(c2));
+      outBottom[c2].classList.toggle('hide', ax!==0);
+      outBottom[c2].classList.toggle('live', ax===0 && c2===state.k);
+      outBottom[c2].classList.toggle('mute', ax===0 && c2!==state.k);
+    }
+
+    for(var a=0;a<B0;a++) rowHdr[a].setAttribute('aria-pressed', String(ax===1 && a===state.k));
+    for(var b=0;b<B1;b++) colHdr[b].setAttribute('aria-pressed', String(ax===0 && b===state.k));
+
+    dimsIn.innerHTML='[ <span class="d '+(ax===0?'dropped':'kept')+'">'+B0+'</span>'+
+                     ' , <span class="d '+(ax===1?'dropped':'kept')+'">'+B1+'</span> ]';
+    dimsOut.textContent='[ '+(ax===1?B0:B1)+' ]';
+    drops.innerHTML='axis <em>'+ax+'</em> removed';
+
+    var vals = ax===1 ? DATA[state.k] : colOf(state.k);
+    read.innerHTML=
+      '<div class="r"><span class="rk">axis</span><span class="rv"><em>'+ax+'</em> — '+(ax===1?'across columns':'down rows')+'</span></div>'+
+      '<div class="r"><span class="rk">shape</span><span class="rv">['+B0+', '+B1+'] &rarr; <em>['+(ax===1?B0:B1)+']</em></span></div>'+
+      '<div class="r"><span class="rk">'+(ax===1?'row':'col')+' '+state.k+'</span><span class="rv">'+vals.join(', ')+'</span></div>'+
+      '<div class="r"><span class="rk">'+state.op+'</span><span class="rv"><em>'+reduce(vals)+'</em></span></div>';
+  }
+
+  function syncSegs(){
+    Array.prototype.forEach.call(segAx.querySelectorAll('button'),function(x){
+      x.setAttribute('aria-pressed', String(parseInt(x.dataset.v,10)===state.axis));
+    });
+  }
+  segAx.addEventListener('click',function(e){
+    var b=e.target.closest('button'); if(!b) return;
+    state.axis=parseInt(b.dataset.v,10); state.k=0; syncSegs(); paint();
+  });
+  segOp.addEventListener('click',function(e){
+    var b=e.target.closest('button'); if(!b) return;
+    Array.prototype.forEach.call(segOp.querySelectorAll('button'),function(x){x.setAttribute('aria-pressed','false');});
+    b.setAttribute('aria-pressed','true');
+    state.op=b.dataset.v; paint();
+  });
+
+  syncSegs();
+  Array.prototype.forEach.call(segOp.querySelectorAll('button'),function(x){
+    x.setAttribute('aria-pressed', String(x.dataset.v===state.op));
+  });
+  paint();
+})();
+</script>
+</body>
+</html>

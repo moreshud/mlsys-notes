@@ -1,0 +1,190 @@
+<!doctype html>
+<!-- fig-height: 398 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Overall flow of GPU programming</title>
+<link rel="stylesheet" href="ds.css?v=13">
+<script src="ds.js?v=10" defer></script>
+<style>
+  .stage{display:flex; gap:var(--s6); align-items:flex-start; flex-wrap:wrap;}
+  .track{flex:1 1 auto; width:100%;}
+
+  .machine{position:relative; height:278px;}
+
+  .die{
+    position:absolute; top:0; height:168px;
+    border:1px solid var(--rule-2); border-radius:4px;
+    background:var(--inset);
+    transition:border-color .34s var(--ease), background .34s var(--ease);
+  }
+  .die.live{border-color:var(--accent); background:var(--accent-wash);}
+  #cpuDie{left:0; width:30%;}
+  #gpuDie{left:54%; right:0;}
+
+  .dn{
+    position:absolute; top:var(--s2); left:var(--s3);
+    font-family:var(--mono); font-size:10.5px; letter-spacing:0.1em;
+    text-transform:uppercase; color:var(--ink-3);
+    transition:color .34s var(--ease);
+  }
+  .die.live .dn{color:var(--accent-ink);}
+  .dsub{
+    position:absolute; top:var(--s2); right:var(--s3);
+    font-family:var(--mono); font-size:9.5px; color:var(--ink-3);
+  }
+
+  .cores{position:absolute; left:var(--s3); right:var(--s3); top:32px; bottom:var(--s3);
+         display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:var(--s2);}
+  .core{
+    border:1px solid var(--rule-2); border-radius:3px; background:var(--panel);
+    display:grid; place-items:center;
+    font-family:var(--mono); font-size:9.5px; color:var(--ink-3);
+    transition:background .3s var(--ease), border-color .3s var(--ease), color .3s var(--ease);
+  }
+  .core.on{background:var(--accent); border-color:var(--accent); color:var(--panel);}
+
+  .sms{position:absolute; left:var(--s3); right:var(--s3); top:32px; bottom:var(--s3);
+       display:grid; grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(4,1fr); gap:4px;}
+  .sm{
+    border:1px solid var(--rule-2); border-radius:2px; background:var(--panel);
+    transition:background .26s var(--ease), border-color .26s var(--ease);
+  }
+  .sm.on{background:var(--accent); border-color:var(--accent);}
+
+  .mem{
+    position:absolute; top:196px; height:62px;
+    border:1px solid var(--rule-2); border-radius:3px; background:var(--inset);
+    transition:border-color .34s var(--ease);
+  }
+  #hostMem{left:0; width:30%;}
+  #devMem{left:54%; right:0;}
+  .mem.live{border-color:var(--accent);}
+  .mn{
+    position:absolute; top:6px; left:var(--s3);
+    font-family:var(--mono); font-size:9.5px; letter-spacing:0.08em;
+    text-transform:uppercase; color:var(--ink-3);
+  }
+
+  .bus{
+    position:absolute; left:30%; right:46%; top:226px; height:16px;
+    border-top:1px dashed var(--rule-2); border-bottom:1px dashed var(--rule-2);
+    transition:border-color .3s var(--ease);
+  }
+  .bus.live{border-top-color:var(--accent); border-bottom-color:var(--accent);}
+  .bus .bl{
+    position:absolute; top:-17px; left:50%; transform:translateX(-50%);
+    font-family:var(--mono); font-size:9.5px; letter-spacing:0.1em;
+    text-transform:uppercase; color:var(--ink-3);
+    transition:color .3s var(--ease);
+  }
+  .bus.live .bl{color:var(--accent-ink);}
+
+  .packet{
+    position:absolute; top:218px; width:9%; height:32px;
+    border:1.5px solid var(--accent); border-radius:3px;
+    background:var(--panel);
+    display:grid; place-items:center;
+    font-family:var(--mono); font-size:11px; color:var(--accent-ink);
+    transition:left .62s var(--ease), background .3s var(--ease), color .3s var(--ease);
+    z-index:3;
+  }
+  .packet.hot{background:var(--accent); color:var(--panel);}
+</style>
+</head>
+<body>
+<div class="fig">
+  <div class="fig-head">
+    <div class="fig-label">overall flow of GPU programming</div>
+    <div class="ctl-row hint">
+      <button class="ghost" id="prev" aria-label="Previous step">
+        <svg viewBox="0 0 10 10"><path d="M7 0.5 2 5l5 4.5z"/></svg>
+      </button>
+      <button class="ghost" id="play" aria-label="Pause"><svg viewBox="0 0 10 10" id="icon"></svg></button>
+      <button class="ghost" id="next" aria-label="Next step">
+        <svg viewBox="0 0 10 10"><path d="M3 0.5 8 5l-5 4.5z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="track">
+      <div class="machine">
+        <div class="die" id="cpuDie">
+          <span class="dn">CPU — host</span><span class="dsub">4 cores</span>
+          <div class="cores" id="cores"></div>
+        </div>
+        <div class="die" id="gpuDie">
+          <span class="dn">GPU — device</span><span class="dsub">32 SMs</span>
+          <div class="sms" id="sms"></div>
+        </div>
+        <div class="mem" id="hostMem"><span class="mn">host RAM</span></div>
+        <div class="mem" id="devMem"><span class="mn">device DRAM — HBM</span></div>
+        <div class="bus" id="bus"><span class="bl">PCIe</span></div>
+        <div class="packet" id="packet">A·B</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var HOST_X=10, DEV_X=70;
+  var STEPS=[
+    { side:'host', at:HOST_X, lbl:'A·B', hot:false, cpu:true,  gpu:false, bus:false },
+    { side:'bus',  at:DEV_X,  lbl:'A·B', hot:false, cpu:false, gpu:false, bus:true  },
+    { side:'dev',  at:DEV_X,  lbl:'A·B', hot:false, cpu:true,  gpu:true,  bus:false },
+    { side:'dev',  at:DEV_X,  lbl:'C tile', hot:true,  cpu:false, gpu:true,  bus:false },
+    { side:'bus',  at:HOST_X, lbl:'C', hot:true,  cpu:false, gpu:false, bus:true  }
+  ];
+  var N=STEPS.length;
+  var state={ i:0, playing:true, timer:null };
+
+  var cores=document.getElementById('cores'), sms=document.getElementById('sms'),
+      cpuDie=document.getElementById('cpuDie'), gpuDie=document.getElementById('gpuDie'),
+      hostMem=document.getElementById('hostMem'), devMem=document.getElementById('devMem'),
+      bus=document.getElementById('bus'), packet=document.getElementById('packet'),
+      play=document.getElementById('play'), icon=document.getElementById('icon');
+  var PLAY='<path d="M2 0.5v9l7-4.5z"/>', PAUSE='<rect x="1" y="0.5" width="2.6" height="9"/><rect x="6.4" y="0.5" width="2.6" height="9"/>';
+
+  var coreEls=[], smEls=[];
+  for(var i=0;i<4;i++){ var c=document.createElement('div'); c.className='core'; c.textContent='core'; cores.appendChild(c); coreEls.push(c); }
+  for(var j=0;j<32;j++){
+    var s=document.createElement('div'); s.className='sm';
+    s.style.transitionDelay=(j*14)+'ms';
+    sms.appendChild(s); smEls.push(s);
+  }
+
+  function paint(){
+    var s=STEPS[state.i];
+    packet.style.left=s.at+'%';
+    packet.textContent=s.lbl;
+    packet.classList.toggle('hot', s.hot);
+
+    cpuDie.classList.toggle('live', s.cpu);
+    gpuDie.classList.toggle('live', s.gpu);
+    bus.classList.toggle('live', s.bus);
+    hostMem.classList.toggle('live', s.side==='host');
+    devMem.classList.toggle('live', s.side==='dev');
+
+    coreEls.forEach(function(c){ c.classList.toggle('on', s.cpu); });
+    smEls.forEach(function(m){ m.classList.toggle('on', s.gpu); });
+  }
+
+  function stop(){ state.playing=false; clearInterval(state.timer); icon.innerHTML=PLAY; play.setAttribute('aria-label','Play'); }
+  function start(){
+    state.playing=true; icon.innerHTML=PAUSE; play.setAttribute('aria-label','Pause');
+    clearInterval(state.timer);
+    state.timer=setInterval(function(){ state.i=(state.i+1)%N; paint(); },1500);
+  }
+  play.addEventListener('click',function(){ state.playing?stop():start(); });
+  document.getElementById('next').addEventListener('click',function(){ stop(); state.i=(state.i+1)%N; paint(); });
+  document.getElementById('prev').addEventListener('click',function(){ stop(); state.i=(state.i-1+N)%N; paint(); });
+
+  paint();
+  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches){ stop(); } else { start(); }
+})();
+</script>
+</body>
+</html>

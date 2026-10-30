@@ -1,0 +1,196 @@
+<!doctype html>
+<!-- fig-height: 299 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Broadcasting</title>
+<link rel="stylesheet" href="ds.css?v=13">
+<script src="ds.js?v=10" defer></script>
+<style>
+
+  .fig{width:1040px; max-width:100%;}
+  .stage{display:flex; gap:var(--s6); align-items:flex-start; flex-wrap:nowrap;}
+
+  .track{flex:1 1 auto; min-width:0;}
+
+  .flow{display:flex; align-items:flex-start; gap:var(--s3);
+        flex-wrap:nowrap; overflow-x:auto; padding-bottom:var(--s2);}
+
+  .panel{display:flex; flex-direction:column; gap:var(--s2);
+         flex:none; align-items:flex-start; min-width:153px;}
+  .panel > .tag{white-space:nowrap;}
+  .grid{display:grid; gap:3px; width:max-content;}
+  .step{
+    align-self:center; margin-top:var(--s5);
+    font-family:var(--mono); font-size:15px; color:var(--ink-3);
+  }
+
+  .b{
+    width:36px; height:28px; border-radius:2px;
+    display:grid; place-items:center;
+    font-family:var(--mono); font-size:11px;
+    font-variant-numeric:tabular-nums;
+    background:var(--accent-wash); border:1.5px solid var(--accent);
+    color:var(--accent-ink);
+  }
+
+  .b.shape{background:var(--inset); border:1px solid var(--rule); color:var(--ink-3);}
+
+  .b.copy{
+    border-style:dashed; opacity:.9;
+    background:repeating-linear-gradient(135deg, var(--accent-wash) 0 5px, transparent 5px 10px);
+  }
+  .b.implied{border-style:dashed; background:transparent; color:var(--ink-3); border-color:var(--rule-2);}
+  .b.no{
+    border:1.5px dashed var(--bad); color:var(--bad);
+    background:repeating-linear-gradient(135deg, var(--bad-wash) 0 4px, transparent 4px 8px);
+  }
+
+  @keyframes copyIn{ from{opacity:0; transform:scale(.86);} to{opacity:.9; transform:scale(1);} }
+  .b.copy{animation:copyIn .34s var(--ease) both;}
+  @media (prefers-reduced-motion:reduce){ .b.copy{animation:none;} }
+
+  .why{
+    margin-top:var(--s5);
+    display:flex; align-items:center; gap:var(--s2);
+    font-family:var(--mono); font-size:12.5px; color:var(--ink-2);
+    padding:var(--s3) var(--s4); border-radius:3px;
+    background:var(--inset); border:1px solid var(--rule);
+  }
+
+  .why.bad{border-color:var(--bad); color:var(--bad);}
+  .why em{font-style:normal; color:var(--accent-ink);}
+
+  .side{flex:none; width:200px;}
+</style>
+</head>
+<body>
+<div class="fig">
+  <div class="fig-head">
+    <div class="fig-label">Broadcasting</div>
+    <div class="ctl-row">
+      <div class="ctl">
+        <span class="k">b is</span>
+        <div class="seg hint" id="seg">
+          <button data-i="0">[3,4]</button><button data-i="1">[1,4]</button><button data-i="2">[3,1]</button><button data-i="3">[4]</button><button data-i="4">[3,2]</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="track">
+      <div class="flow" id="flow"></div>
+      <div class="why" id="why"></div>
+    </div>
+    <div class="side"><div class="read" id="read"></div></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var A=[3,4];
+  var CASES=[
+    { b:[3,4], kind:'exact'  },
+    { b:[1,4], kind:'rows'   },
+    { b:[3,1], kind:'cols'   },
+    { b:[4],   kind:'rows', promote:true },
+    { b:[3,2], kind:'fail'   }
+  ];
+  var state={ i:1 };
+
+  var flow=document.getElementById('flow'), why=document.getElementById('why'),
+      read=document.getElementById('read'), seg=document.getElementById('seg');
+
+  function valFor(shape,i,j){
+    if(shape.length===1) return (j+1)*10;
+    if(shape[0]===1)     return (j+1)*10;
+    if(shape[1]===1)     return (i+1)*10;
+    return i*4+j+1;
+  }
+
+  function gridEl(rows, cols, fn){
+    var g=document.createElement('div');
+    g.className='grid'; g.style.gridTemplateColumns='repeat('+cols+',auto)';
+    for(var i=0;i<rows;i++) for(var j=0;j<cols;j++){
+      var d=document.createElement('div');
+      var spec=fn(i,j);
+      d.className='b'+(spec.cls?' '+spec.cls:'');
+      d.textContent=spec.txt;
+      if(spec.delay) d.style.animationDelay=spec.delay+'ms';
+      g.appendChild(d);
+    }
+    return g;
+  }
+  function panel(label, node){
+    var p=document.createElement('div'); p.className='panel';
+    var t=document.createElement('span'); t.className='tag'; t.textContent=label;
+    p.appendChild(t); p.appendChild(node); return p;
+  }
+  function step(sym){ var s=document.createElement('div'); s.className='step'; s.textContent=sym; return s; }
+
+  function paint(){
+    var c=CASES[state.i], b=c.b, fail=c.kind==='fail';
+    flow.innerHTML='';
+
+    flow.appendChild(panel('a — ['+A.join(',')+']',
+      gridEl(A[0],A[1],function(){ return {cls:'shape', txt:''}; })));
+    flow.appendChild(step('+'));
+
+    var eff = c.promote ? [1,b[0]] : b;
+    var brows = b.length===1 ? 1 : b[0], bcols = b.length===1 ? b[0] : b[1];
+    flow.appendChild(panel('b — ['+b.join(',')+']'+(c.promote ? ' → ['+eff.join(',')+']' : ''),
+      gridEl(brows,bcols,function(i,j){ return {txt:valFor(b,i,j)}; })));
+
+    flow.appendChild(step('→'));
+
+    if(fail){
+      flow.appendChild(panel('cannot stretch',
+        gridEl(A[0],A[1],function(i,j){
+          return j<b[1] ? {txt:valFor(b,i,j)} : {cls:'no', txt:'✗'};
+        })));
+      why.className='why bad';
+      why.innerHTML='dim 1 is 4 vs 2 — a dim only stretches when it is 1';
+    } else {
+      var copies=0;
+      flow.appendChild(panel('stretched — ['+A.join(',')+']',
+        gridEl(A[0],A[1],function(i,j){
+          var isCopy, v;
+          if(c.kind==='exact'){ isCopy=false; v=valFor(b,i,j); }
+          else if(c.kind==='rows'){ isCopy=i>0; v=valFor(b,0,j); }
+          else { isCopy=j>0; v=valFor(b,i,0); }
+          if(isCopy) copies++;
+          return { cls:isCopy?'copy':'', txt:v, delay:isCopy?(i*4+j)*40:0 };
+        })));
+      why.className='why';
+      why.innerHTML = c.kind==='exact'
+        ? 'shapes already match — <em>nothing copied</em>'
+        : (c.kind==='rows'
+            ? (c.promote ? '[4] reads as <em>[1,4]</em>, then one row of 4 copied down <em>'+A[0]+'&times;</em>'
+                       : 'one row of 4 copied down <em>'+A[0]+'&times;</em>')
+            : 'one column of 3 copied across <em>'+A[1]+'&times;</em>');
+    }
+
+    read.innerHTML=
+      '<div class="r"><span class="rk">a</span><span class="rv">['+A.join(', ')+']</span></div>'+
+      '<div class="r"><span class="rk">b</span><span class="rv">['+b.join(', ')+']'+
+        (c.promote ? ' <s>&rarr; ['+eff.join(', ')+']</s>' : '')+'</span></div>'+
+      '<div class="r"><span class="rk">result</span><span class="rv">'+
+        (fail ? '<em style="color:var(--bad)">incompatible</em>' : '<em>['+A.join(', ')+']</em>')+'</span></div>';
+  }
+
+  seg.addEventListener('click',function(e){
+    var b=e.target.closest('button'); if(!b) return;
+    Array.prototype.forEach.call(seg.querySelectorAll('button'),function(x){x.setAttribute('aria-pressed','false');});
+    b.setAttribute('aria-pressed','true');
+    state.i=parseInt(b.dataset.i,10); paint();
+  });
+  Array.prototype.forEach.call(seg.querySelectorAll('button'),function(x){
+    x.setAttribute('aria-pressed', String(parseInt(x.dataset.i,10)===state.i));
+  });
+  paint();
+})();
+</script>
+</body>
+</html>

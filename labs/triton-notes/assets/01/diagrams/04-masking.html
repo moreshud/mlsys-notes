@@ -1,0 +1,157 @@
+<!doctype html>
+<!-- fig-height: 398 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Masking</title>
+<link rel="stylesheet" href="ds.css?v=13">
+<script src="ds.js?v=10" defer></script>
+<style>
+
+  .fig{width:fit-content; max-width:1040px;}
+  .stage{display:flex; gap:var(--s6); align-items:flex-start; justify-content:center; flex-wrap:nowrap;}
+
+  .track{
+    flex:none; min-height:279px;
+    display:flex; flex-direction:column; justify-content:center; align-items:center;
+  }
+
+  .field{display:grid; gap:3px; width:max-content;}
+  .rl{
+    font-family:var(--mono); font-size:10.5px; color:var(--ink-3);
+    display:flex; align-items:center; justify-content:flex-end;
+    padding-right:var(--s2); white-space:nowrap;
+  }
+  .cell{
+    border-radius:2px;
+    display:grid; place-items:center;
+    font-family:var(--mono); font-size:10px;
+    font-variant-numeric:tabular-nums;
+    background:var(--accent-wash); border:1px solid var(--accent);
+    color:var(--accent-ink);
+    transition:background .2s var(--ease), border-color .2s var(--ease), color .2s var(--ease);
+  }
+  .cell.dead{
+    border-style:dashed; border-color:var(--bad); color:var(--bad);
+    background:repeating-linear-gradient(135deg, var(--bad-wash) 0 3px, transparent 3px 6px);
+  }
+  .legend{display:flex; gap:var(--s5); margin-top:var(--s4); flex-wrap:wrap;}
+  .lg{display:flex; align-items:center; gap:var(--s2); font-family:var(--mono); font-size:11px; color:var(--ink-3);}
+  .sw{width:14px; height:14px; border-radius:2px; flex:none;}
+  .sw.ok{background:var(--accent-wash); border:1px solid var(--accent);}
+  .sw.no{border:1px dashed var(--bad); background:repeating-linear-gradient(135deg, var(--bad-wash) 0 3px, transparent 3px 6px);}
+
+  .side{flex:0 1 250px; min-width:220px;}
+
+  .read .rk{width:104px;}
+</style>
+</head>
+<body>
+<div class="fig">
+  <div class="fig-head">
+    <div class="fig-label">masking</div>
+    <div class="ctl-row hint">
+      <div class="ctl">
+        <span class="k">N</span>
+        <input type="range" id="nR" min="9" max="48" step="1" value="34">
+        <span class="val" id="nV">34</span>
+      </div>
+      <div class="ctl">
+        <span class="k">BN</span>
+        <div class="seg" id="segB">
+          <button data-v="4">4</button><button data-v="8">8</button><button data-v="16">16</button>
+        </div>
+      </div>
+      <div class="ctl">
+        <span class="k">other</span>
+        <div class="seg" id="segO">
+          <button data-v="0.0">0.0</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="track">
+      <div class="field" id="field"></div>
+      <div class="legend">
+        <span class="lg"><span class="sw ok"></span>mask true — real element</span>
+        <span class="lg"><span class="sw no"></span>mask false — reads <em id="othLbl" style="font-style:normal;color:var(--bad)">0.0</em></span>
+      </div>
+    </div>
+    <div class="side">
+      <div class="read" id="read"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var state={ n:34, block:8, other:'0.0' };
+
+  var field=document.getElementById('field'), read=document.getElementById('read'),
+      nR=document.getElementById('nR'),
+      nV=document.getElementById('nV'), segB=document.getElementById('segB'),
+      segO=document.getElementById('segO'), othLbl=document.getElementById('othLbl');
+
+  function cdiv(a,b){ return Math.floor((a+b-1)/b); }
+
+  function paint(){
+    var n=state.n, B=state.block, k=cdiv(n,B);
+    var covered=k*B, dead=covered-n;
+    var cw = B>8 ? 34 : 44;
+    var rh = k>8 ? 18 : 24;
+
+    field.style.gridTemplateColumns='58px repeat('+B+','+cw+'px)';
+    field.style.gridTemplateRows='repeat('+k+','+rh+'px)';
+    field.innerHTML='';
+
+    for(var i=0;i<k;i++){
+      var lab=document.createElement('div');
+      lab.className='rl'; lab.textContent='N tile '+i;
+      field.appendChild(lab);
+      for(var j=0;j<B;j++){
+        var off=i*B+j, ok=off<n;
+        var c=document.createElement('div');
+        c.className='cell'+(ok?'':' dead');
+        c.textContent = ok ? off : state.other;
+        field.appendChild(c);
+      }
+    }
+
+    othLbl.textContent=state.other;
+
+    read.innerHTML=
+      '<div class="r"><span class="rk">N</span><span class="rv"><em>'+n+'</em></span></div>'+
+      '<div class="r"><span class="rk">BN</span><span class="rv">'+B+'</span></div>'+
+      '<div class="r"><span class="rk">N tiles</span><span class="rv">cdiv('+n+','+B+') = <em>'+k+'</em></span></div>'+
+      '<div class="r"><span class="rk">lanes</span><span class="rv">'+covered+' total</span></div>'+
+      '<div class="r"><span class="rk">masked</span><span class="rv">'+
+        (dead>0 ? '<em>'+dead+'</em> &rarr; '+state.other : '0 — divides evenly')+'</span></div>';
+  }
+
+  function segSetup(el, apply){
+    el.addEventListener('click',function(e){
+      var b=e.target.closest('button'); if(!b) return;
+      Array.prototype.forEach.call(el.querySelectorAll('button'),function(x){x.setAttribute('aria-pressed','false');});
+      b.setAttribute('aria-pressed','true');
+      apply(b.dataset.v); paint();
+    });
+  }
+  segSetup(segB,function(v){ state.block=parseInt(v,10); });
+  segSetup(segO,function(v){ state.other=v; });
+  nR.addEventListener('input',function(){ state.n=parseInt(nR.value,10); nV.textContent=state.n; paint(); });
+
+  Array.prototype.forEach.call(segB.querySelectorAll('button'),function(x){
+    x.setAttribute('aria-pressed', String(parseInt(x.dataset.v,10)===state.block));
+  });
+  Array.prototype.forEach.call(segO.querySelectorAll('button'),function(x){
+    x.setAttribute('aria-pressed', String(x.dataset.v===state.other));
+  });
+  nR.value=state.n; nV.textContent=state.n;
+  paint();
+})();
+</script>
+</body>
+</html>

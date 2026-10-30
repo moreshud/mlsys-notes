@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300..800&amp;family=Instrument+Serif:ital@1&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<link rel="stylesheet" href="site/blog.css?v={{V}}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%234338ca'/><rect x='7' y='7' width='8' height='8' rx='1.5' fill='white' opacity='.95'/><rect x='17' y='7' width='8' height='8' rx='1.5' fill='white' opacity='.5'/><rect x='7' y='17' width='8' height='8' rx='1.5' fill='white' opacity='.5'/><rect x='17' y='17' width='8' height='8' rx='1.5' fill='white' opacity='.28'/></svg>">
+<script>
+
+  (function(){
+    try{
+      var saved = localStorage.getItem('tn-theme');
+      var dark = saved ? saved === 'dark'
+                       : matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    }catch(e){}
+  })();
+</script>
+</head>
+<body>
+<div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
+
+<header class="masthead">
+  <div class="masthead-in">
+    <a class="brand" href="01.html">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span class="brand-name">{{SITE_TITLE}}</span>
+    </a>
+    <div class="masthead-right">
+{{PAGE_NAV}}
+      <button class="rail-open" id="rail-open" type="button" aria-expanded="false" aria-controls="rail">Contents</button>
+      <button class="toggle" id="theme-toggle" type="button" aria-label="Switch colour theme">
+        <svg class="i-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><g><path d="M12 2.6v2.6M12 18.8v2.6M2.6 12h2.6M18.8 12h2.6M5.4 5.4l1.9 1.9M16.7 16.7l1.9 1.9M18.6 5.4l-1.9 1.9M7.3 16.7l-1.9 1.9"/></g></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.2A8.4 8.4 0 0 1 9.8 4a8.4 8.4 0 1 0 10.2 10.2z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="scrim" id="scrim"></div>
+
+<aside class="rail" id="rail">
+  <button class="rail-ticks" id="rail-ticks" type="button" aria-label="Open contents" aria-expanded="false" aria-controls="rail-panel"></button>
+  <div class="rail-panel" id="rail-panel" aria-hidden="true" inert>
+    <div class="rail-in">
+      <p class="rail-label">Contents</p>
+      {{TOC}}
+      <span class="rail-rule" aria-hidden="true"></span>
+      <span class="rail-marker" id="rail-marker" aria-hidden="true"></span>
+    </div>
+  </div>
+</aside>
+
+<div class="shell" id="top">
+  <main class="main">
+    <article class="post">
+      <div class="post-head">
+        <h1 class="post-title">{{TITLE}}</h1>
+      </div>
+
+      {{ARTICLE}}
+    </article>
+
+  </main>
+</div>
+
+<button class="totop" id="totop" type="button" aria-label="Back to top">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6 12l6-6 6 6"/></svg>
+</button>
+
+<script src="site/blog.js?v={{V}}" defer></script>
+</body>
+</html>

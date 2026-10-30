@@ -1,0 +1,231 @@
+<!doctype html>
+<!-- fig-height: 560 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>pid_m and pid_n map to an output tile</title>
+<link rel="stylesheet" href="ds.css?v=13">
+<script src="ds.js?v=10" defer></script>
+<style>
+  .stage{display:flex; gap:var(--s6); align-items:flex-start; flex-wrap:wrap;}
+  .track{flex:none;}
+  .wrap{display:flex; gap:var(--s3); align-items:stretch;}
+
+  .gutter{
+    width:52px; flex:none; display:flex; flex-direction:column; justify-content:space-between;
+    padding:2px 0;
+    font-family:var(--mono); font-size:10px; color:var(--ink-3); text-align:right;
+  }
+
+  .gutter .ax{color:var(--alt); font-weight:600;}
+  .axis{
+    margin-left:calc(52px + var(--s3));
+    display:flex; justify-content:space-between;
+    font-family:var(--mono); font-size:10px; color:var(--ink-3);
+  }
+  .axis .ax{color:var(--accent-ink); font-weight:600;}
+
+  .grid2d{
+    position:relative; flex:none;
+
+    box-sizing:content-box;
+    border:1px solid var(--rule-2); border-radius:3px;
+    background:var(--panel); overflow:hidden;
+  }
+  .cells{
+    position:absolute; inset:0;
+    background-image:
+      repeating-linear-gradient(to right, var(--grid) 0 1px, transparent 1px var(--cw)),
+      repeating-linear-gradient(to bottom, var(--grid) 0 1px, transparent 1px var(--rh));
+  }
+
+  .band{position:absolute; z-index:1; pointer-events:none; transition:transform .2s var(--ease);}
+  .band.h{left:0; right:0; background:var(--alt-wash);}
+  .band.v{top:0; bottom:0; background:var(--accent-wash);}
+
+  .pt{
+    position:absolute; z-index:2;
+    border:1px solid var(--rule-2); border-radius:2px;
+    display:grid; place-items:center; cursor:pointer; background:transparent;
+    font-family:var(--mono); font-size:11.5px; color:var(--ink-3);
+    font-variant-numeric:tabular-nums;
+    transition:border-color .2s var(--ease), color .2s var(--ease);
+  }
+  .pt:hover{border-color:var(--accent); color:var(--accent-ink);}
+  .pt.on{
+    border-color:var(--accent); border-width:1.5px; background:var(--accent-wash-2);
+    color:var(--accent-ink); font-weight:600;
+  }
+
+  .keys{display:flex; gap:var(--s5); flex-wrap:wrap; margin-top:var(--s4);}
+  .key{
+    display:flex; align-items:center; gap:var(--s2);
+    font-family:var(--mono); font-size:11.5px; color:var(--ink-2);
+    padding:5px var(--s3); border-radius:3px;
+    border:1px solid var(--rule); background:var(--inset);
+  }
+  .key .dot{width:9px; height:9px; border-radius:2px; flex:none;}
+  .key.a0 .dot{background:var(--alt);}
+  .key.a1 .dot{background:var(--accent);}
+
+  .fig{max-width:856px;}
+  .side{flex:0 1 300px; min-width:260px;}
+</style>
+</head>
+<body>
+<div class="fig">
+  <div class="fig-head">
+    <div class="fig-label">pid_m, pid_n &rarr; output tile</div>
+    <div class="ctl-row">
+      <div class="ctl">
+        <span class="k">BM</span>
+        <div class="seg hint" id="segM">
+          <button data-v="2">2</button><button data-v="4">4</button><button data-v="8">8</button>
+        </div>
+      </div>
+      <div class="ctl">
+        <span class="k">BN</span>
+        <div class="seg hint" id="segN">
+          <button data-v="2">2</button><button data-v="4">4</button><button data-v="8">8</button>
+        </div>
+      </div>
+      <button class="ghost" id="play" aria-label="Pause"><svg viewBox="0 0 10 10" id="icon"></svg></button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="track">
+      <div class="wrap">
+        <div class="gutter">
+          <span>row 0</span>
+          <span class="ax">axis 0 &darr;</span>
+          <span id="axB"></span>
+        </div>
+        <div class="grid2d" id="grid2d">
+          <div class="cells" id="cells"></div>
+          <div class="band h" id="bandH"></div>
+          <div class="band v" id="bandV"></div>
+        </div>
+      </div>
+      <div class="axis">
+        <span>col 0</span>
+        <span class="ax">axis 1 &rarr;</span>
+        <span id="axR"></span>
+      </div>
+      <div class="keys">
+        <span class="key a0"><span class="dot"></span>pid_m = tl.program_id(axis=0)</span>
+        <span class="key a1"><span class="dot"></span>pid_n = tl.program_id(axis=1)</span>
+      </div>
+    </div>
+    <div class="side"><div class="read" id="read"></div></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var M=16, N=16, CS=24;
+  var state={ blockM:4, blockN:4, pm:0, pn:0, playing:true, timer:null, pts:[] };
+
+  var grid2d=document.getElementById('grid2d'), cells=document.getElementById('cells'),
+      read=document.getElementById('read'), segM=document.getElementById('segM'),
+      segN=document.getElementById('segN'), play=document.getElementById('play'),
+      icon=document.getElementById('icon'), axR=document.getElementById('axR'),
+      axB=document.getElementById('axB'), bandH=document.getElementById('bandH'),
+      bandV=document.getElementById('bandV');
+
+  var PLAY='<path d="M2 0.5v9l7-4.5z"/>', PAUSE='<rect x="1" y="0.5" width="2.6" height="9"/><rect x="6.4" y="0.5" width="2.6" height="9"/>';
+
+  function cdiv(a,b){ return Math.floor((a+b-1)/b); }
+  function gm(){ return cdiv(M,state.blockM); }
+  function gn(){ return cdiv(N,state.blockN); }
+
+  grid2d.style.width=(N*CS)+'px';
+  grid2d.style.height=(M*CS)+'px';
+  cells.style.setProperty('--cw',CS+'px');
+  cells.style.setProperty('--rh',CS+'px');
+  axR.textContent='col '+(N-1);
+  axB.textContent='row '+(M-1);
+
+  function build(){
+    state.pts.forEach(function(e){ e.remove(); });
+    state.pts=[];
+    var GM=gm(), GN=gn(), BM=state.blockM, BN=state.blockN;
+    for(var m=0;m<GM;m++){
+      for(var n=0;n<GN;n++){
+        (function(pm,pn){
+          var e=document.createElement('div');
+          e.className='pt';
+          e.style.left=(pn*BN*CS)+'px';
+          e.style.top=(pm*BM*CS)+'px';
+          e.style.width=(BN*CS)+'px';
+          e.style.height=(BM*CS)+'px';
+          e.textContent=pm+','+pn;
+          e.setAttribute('role','button'); e.setAttribute('tabindex','0');
+          e.setAttribute('aria-label','program '+pm+', '+pn);
+          e.addEventListener('click', function(){ stop(); state.pm=pm; state.pn=pn; paint(); });
+          e.addEventListener('keydown', function(ev){
+            if(ev.key==='Enter'||ev.key===' '){ ev.preventDefault(); stop(); state.pm=pm; state.pn=pn; paint(); }
+          });
+          grid2d.appendChild(e); state.pts.push(e);
+        })(m,n);
+      }
+    }
+    bandH.style.height=(BM*CS)+'px';
+    bandV.style.width=(BN*CS)+'px';
+  }
+
+  function paint(){
+    var GM=gm(), GN=gn(), BM=state.blockM, BN=state.blockN;
+    if(state.pm>=GM) state.pm=0;
+    if(state.pn>=GN) state.pn=0;
+    var pm=state.pm, pn=state.pn;
+
+    state.pts.forEach(function(e,i){
+      e.classList.toggle('on', Math.floor(i/GN)===pm && (i%GN)===pn);
+    });
+    bandH.style.transform='translateY('+(pm*BM*CS)+'px)';
+    bandV.style.transform='translateX('+(pn*BN*CS)+'px)';
+
+    var mLo=pm*BM, nLo=pn*BN;
+    read.innerHTML=
+      '<div class="r"><span class="rk">grid</span><span class="rv">('+GM+', '+GN+') &mdash; <em>'+(GM*GN)+'</em> programs</span></div>'+
+      '<div class="r"><span class="rk">pid_m</span><span class="rv">tl.program_id(axis=0) = <em>'+pm+'</em></span></div>'+
+      '<div class="r"><span class="rk">pid_n</span><span class="rv">tl.program_id(axis=1) = <em>'+pn+'</em></span></div>'+
+      '<div class="r"><span class="rk">rows</span><span class="rv">'+mLo+' : '+(mLo+BM)+'</span></div>'+
+      '<div class="r"><span class="rk">cols</span><span class="rv">'+nLo+' : '+(nLo+BN)+'</span></div>';
+  }
+
+  function bindSeg(seg,key){
+    seg.addEventListener('click',function(e){
+      var b=e.target.closest('button'); if(!b) return;
+      Array.prototype.forEach.call(seg.querySelectorAll('button'),function(x){x.setAttribute('aria-pressed','false');});
+      b.setAttribute('aria-pressed','true');
+      state[key]=parseInt(b.dataset.v,10); state.pm=0; state.pn=0;
+      build(); paint();
+    });
+    Array.prototype.forEach.call(seg.querySelectorAll('button'),function(x){
+      x.setAttribute('aria-pressed', String(parseInt(x.dataset.v,10)===state[key]));
+    });
+  }
+  bindSeg(segM,'blockM'); bindSeg(segN,'blockN');
+
+  function advance(){
+    state.pn++;
+    if(state.pn>=gn()){ state.pn=0; state.pm=(state.pm+1)%gm(); }
+  }
+
+  function stop(){ state.playing=false; clearInterval(state.timer); icon.innerHTML=PLAY; play.setAttribute('aria-label','Play'); }
+  function start(){
+    state.playing=true; icon.innerHTML=PAUSE; play.setAttribute('aria-label','Pause');
+    clearInterval(state.timer);
+    state.timer=setInterval(function(){ advance(); paint(); },1150);
+  }
+  play.addEventListener('click',function(){ state.playing?stop():start(); });
+
+  build(); paint();
+  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches){ stop(); } else { start(); }
+})();
+</script>
+</body>
+</html>

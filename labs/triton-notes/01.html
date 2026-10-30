@@ -1,0 +1,698 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Triton Notes</title>
+<meta name="description" content="Working notes on writing GPU kernels with Triton — tiles, program ids, offsets, masking, and the launch grid, with interactive figures.">
+<meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300..800&amp;family=Instrument+Serif:ital@1&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<link rel="stylesheet" href="site/blog.css?v=57">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%234338ca'/><rect x='7' y='7' width='8' height='8' rx='1.5' fill='white' opacity='.95'/><rect x='17' y='7' width='8' height='8' rx='1.5' fill='white' opacity='.5'/><rect x='7' y='17' width='8' height='8' rx='1.5' fill='white' opacity='.5'/><rect x='17' y='17' width='8' height='8' rx='1.5' fill='white' opacity='.28'/></svg>">
+<script>
+
+  (function(){
+    try{
+      var saved = localStorage.getItem('tn-theme');
+      var dark = saved ? saved === 'dark'
+                       : matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    }catch(e){}
+  })();
+</script>
+</head>
+<body>
+<div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
+
+<header class="masthead">
+  <div class="masthead-in">
+    <a class="brand" href="01.html">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span class="brand-name">Triton Notes</span>
+    </a>
+    <div class="masthead-right">
+
+      <button class="rail-open" id="rail-open" type="button" aria-expanded="false" aria-controls="rail">Contents</button>
+      <button class="toggle" id="theme-toggle" type="button" aria-label="Switch colour theme">
+        <svg class="i-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><g><path d="M12 2.6v2.6M12 18.8v2.6M2.6 12h2.6M18.8 12h2.6M5.4 5.4l1.9 1.9M16.7 16.7l1.9 1.9M18.6 5.4l-1.9 1.9M7.3 16.7l-1.9 1.9"/></g></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.2A8.4 8.4 0 0 1 9.8 4a8.4 8.4 0 1 0 10.2 10.2z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="scrim" id="scrim"></div>
+
+<aside class="rail" id="rail">
+  <button class="rail-ticks" id="rail-ticks" type="button" aria-label="Open contents" aria-expanded="false" aria-controls="rail-panel"></button>
+  <div class="rail-panel" id="rail-panel" aria-hidden="true" inert>
+    <div class="rail-in">
+      <p class="rail-label">Contents</p>
+      <nav class="toc" aria-label="Table of contents"><ol class="toc-list"><li class="toc-item toc-item--h2"><a href="#overall-pattern-of-gpu-programming" data-toc="overall-pattern-of-gpu-programming">Overall Pattern of GPU Programming</a></li><li class="toc-item toc-item--h2"><a href="#1-launching-a-kernel" data-toc="1-launching-a-kernel">1. Launching a kernel</a></li><li class="toc-item toc-item--h3"><a href="#validations" data-toc="validations">Validations</a></li><li class="toc-item toc-item--h3"><a href="#setting-grid-size" data-toc="setting-grid-size">Setting Grid Size</a></li><li class="toc-item toc-item--h3"><a href="#what-parameters-do-we-send" data-toc="what-parameters-do-we-send">What Parameters Do We Send?</a></li><li class="toc-item toc-item--h3"><a href="#end-to-end-example-launching-a-vector-add-kernel" data-toc="end-to-end-example-launching-a-vector-add-kernel">End-to-end example: launching a vector add kernel</a></li><li class="toc-item toc-item--h2"><a href="#2-defining-a-kernel" data-toc="2-defining-a-kernel">2. Defining a kernel</a></li><li class="toc-item toc-item--h3"><a href="#central-abstractions-tile-and-program" data-toc="central-abstractions-tile-and-program">Central abstractions: Tile and Program</a></li><li class="toc-item toc-item--h3"><a href="#typical-kernel-parameters" data-toc="typical-kernel-parameters">Typical Kernel Parameters</a></li><li class="toc-item toc-item--h3"><a href="#1-read-the-program-id-and-determine-which-output-tile-the-program-owns" data-toc="1-read-the-program-id-and-determine-which-output-tile-the-program-owns">1. Read the program ID and determine which output tile the program owns</a></li><li class="toc-item toc-item--h3"><a href="#2-construct-the-tiles-global-element-offsets" data-toc="2-construct-the-tiles-global-element-offsets">2. Construct the tile’s global element offsets</a></li><li class="toc-item toc-item--h3"><a href="#3-use-those-offsets-to-form-input-and-output-pointers" data-toc="3-use-those-offsets-to-form-input-and-output-pointers">3. Use those offsets to form input and output pointers</a></li><li class="toc-item toc-item--h3"><a href="#4-load-the-input-blocks" data-toc="4-load-the-input-blocks">4. Load the input blocks</a></li><li class="toc-item toc-item--h3"><a href="#5-compute-the-output-block" data-toc="5-compute-the-output-block">5. Compute the output block</a></li><li class="toc-item toc-item--h3"><a href="#6-store-the-output-block" data-toc="6-store-the-output-block">6. Store the output block</a></li><li class="toc-item toc-item--h3"><a href="#end-to-end-example-of-a-vector-addition-kernel" data-toc="end-to-end-example-of-a-vector-addition-kernel">End-to-end example of a vector addition kernel</a></li><li class="toc-item toc-item--h2"><a href="#2d-and-beyond" data-toc="2d-and-beyond">2D and beyond</a></li><li class="toc-item toc-item--h3"><a href="#launching-a-matmul-kernel" data-toc="launching-a-matmul-kernel">Launching a matmul kernel</a></li><li class="toc-item toc-item--h3"><a href="#defining-a-matmul-kernel" data-toc="defining-a-matmul-kernel">Defining a matmul kernel</a></li><li class="toc-item toc-item--h3"><a href="#selecting-configurations" data-toc="selecting-configurations">Selecting Configurations</a></li><li class="toc-item toc-item--h3"><a href="#a-few-more-triton-operations" data-toc="a-few-more-triton-operations">A few more Triton operations</a></li><li class="toc-item toc-item--h2"><a href="#testing" data-toc="testing">Testing</a></li><li class="toc-item toc-item--h3"><a href="#example-3" data-toc="example-3">Example</a></li><li class="toc-item toc-item--h2"><a href="#performance-benchmarking" data-toc="performance-benchmarking">Performance Benchmarking</a></li><li class="toc-item toc-item--h2"><a href="#debugging" data-toc="debugging">Debugging</a></li><li class="toc-item toc-item--h2"><a href="#wrapping-up" data-toc="wrapping-up">Wrapping Up</a></li></ol></nav>
+      <span class="rail-rule" aria-hidden="true"></span>
+      <span class="rail-marker" id="rail-marker" aria-hidden="true"></span>
+    </div>
+  </div>
+</aside>
+
+<div class="shell" id="top">
+  <main class="main">
+    <article class="post">
+      <div class="post-head">
+        <h1 class="post-title">Triton Notes</h1>
+      </div>
+
+      <figure class="article-logo"><img src="assets/01/triton.png" alt="Triton logo" decoding="async"></figure>
+<p><strong><a href="https://github.com/triton-lang/triton" target="_blank" rel="noopener">Triton</a></strong> is a programming language and compiler originally developed at OpenAI that makes custom GPU kernels easier to write. It makes efficient GPU code easier to express than in CUDA, especially for deep learning workloads.</p>
+<p>In CUDA, you usually decide what each individual thread does and manually manage many low-level details. Triton provides a higher-level abstraction: you describe what one <strong>program</strong> does to a block, or tile, of data. Triton&#x27;s compiler then maps those block operations onto GPU threads and generates the GPU code. We will see what this means later in this note.</p>
+<p>It is also worth noting that Triton uses the same style of array programming found in PyTorch and NumPy. If that way of thinking is unfamiliar, these two introductions are useful refreshers to <em>think in shapes</em>:</p>
+<ul><li><a href="https://www.alcala21.org/post/broadcasting/" target="_blank" rel="noopener">A Visual Guide To Broadcasting In NumPy</a></li><li><a href="https://realpython.com/numpy-array-programming/" target="_blank" rel="noopener">Look Ma, No for Loops: Array Programming With NumPy</a></li></ul>
+<p>This note is an introduction to Triton&#x27;s abstractions. We will use two kernels—vector addition and matrix multiplication—throughout the note to build intuition.</p>
+<h2 id="overall-pattern-of-gpu-programming" class="anchored"><a class="anchor" href="#overall-pattern-of-gpu-programming" aria-label="Link to this section">#</a>Overall Pattern of GPU Programming</h2>
+<p>At a high level, GPU programming has two sides regardless of the <a href="https://en.wikipedia.org/wiki/Domain-specific_language" target="_blank" rel="noopener">DSL</a>:</p>
+<ol><li><strong><a href="https://modal.com/gpu-glossary/host-software" target="_blank" rel="noopener">Host (CPU)</a> code</strong>, which prepares the input tensors, decides how much parallel work to launch, and launches the kernel.</li><li><strong><a href="https://modal.com/gpu-glossary/device-software" target="_blank" rel="noopener">Device (GPU)</a> code</strong>, or the kernel, describes the computation that each GPU program performs.</li></ol>
+<p>So the overall flow looks like this:</p>
+<div class="figure" data-figure><iframe src="assets/01/diagrams/01-host-device-flow.html?v=57" title="Overall flow of GPU programming" height="398" loading="lazy" scrolling="no"></iframe></div>
+<ol><li>Create host and device memory for tensor data.</li><li>Copy tensor data from host to device.</li><li>Load tensor data on-chip.</li><li>Execute the operation.</li><li>Store the tensor back to device memory.</li></ol>
+<p>We will divide this into two steps and look at each:</p>
+<ol><li>Launching a kernel.</li><li>Defining a kernel.</li></ol>
+<h2 id="1-launching-a-kernel" class="anchored"><a class="anchor" href="#1-launching-a-kernel" aria-label="Link to this section">#</a>1. Launching a kernel</h2>
+<p>How can we run a kernel?</p>
+<p>As in CUDA, the host (CPU) launches the kernel before any device-side work begins. A single launch creates many instances of the kernel, called <strong>programs</strong> in Triton.</p>
+<p>We will look at this in three steps:</p>
+<ol><li>Validation.</li><li>Setting the grid size.</li><li>Launching the kernel.</li></ol>
+<h3 id="validations" class="anchored"><a class="anchor" href="#validations" aria-label="Link to this section">#</a>Validations</h3>
+<p>Because kernels provide considerable freedom over variables and memory, it is helpful to fail fast and loud when something is wrong. We therefore validate shapes, strides, dtypes, and device-specific features, such as those introduced with Blackwell.</p>
+<p>These assertions largely serve two purposes: ensuring correctness and enabling specialized fast paths. Many kernels branch into completely different implementations based on the results of these checks.</p>
+<h4 id="validation-example" class="anchored"><a class="anchor" href="#validation-example" aria-label="Link to this section">#</a>Validation example</h4>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span></div><div class="code-scroll"><pre><code><span class="t-k">def</span> <span class="t-f">vector_add</span>(a: <span class="t-b">torch</span>.Tensor, b: <span class="t-b">torch</span>.Tensor):
+    <span class="t-k">assert</span> a.is_cuda <span class="t-k">and</span> b.is_cuda
+    <span class="t-k">assert</span> a.device == b.device
+    <span class="t-k">assert</span> a.ndim == b.ndim == <span class="t-n">1</span>
+    <span class="t-k">assert</span> a.shape == b.shape
+    <span class="t-k">assert</span> a.dtype == b.dtype
+    <span class="t-c"># ...</span></code></pre></div></div></figure>
+<h3 id="setting-grid-size" class="anchored"><a class="anchor" href="#setting-grid-size" aria-label="Link to this section">#</a>Setting Grid Size</h3>
+<p>A launch grid is a 1D, 2D, or 3D tuple specifying how many program instances run along each axis. Inside the kernel, <code>tl.program_id(axis)</code> identifies the current program along that axis.</p>
+<p>Poor grid mapping can reduce parallelism or cache locality, so it&#x27;s important to tune it.</p>
+<p>So how do we set the grid size? Most kernels use one of two launch styles:</p>
+<h4 id="1-non-persistent-tiled-launch-one-program-per-output-tile" class="anchored"><a class="anchor" href="#1-non-persistent-tiled-launch-one-program-per-output-tile" aria-label="Link to this section">#</a>1. Non-persistent tiled launch (one program per output tile)</h4>
+<p>In a non-persistent tiled launch, we divide the output into tiles of <code>BN</code> elements and launch one program for each tile. Program 0 processes the first <code>BN</code> elements, program 1 processes the next <code>BN</code> elements, and so on. Therefore, the grid size is the number of tiles required to cover all <code>N</code> elements.</p>
+<p>For example,</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span></div><div class="code-scroll"><pre><code><span class="t-c"># ...</span>
+grid = <span class="t-k">lambda</span> meta: (<span class="t-b">triton</span>.cdiv(N, meta[<span class="t-s">&quot;BN&quot;</span>]),)
+_vec_add_kernel[grid](
+        <span class="t-c"># ...</span>
+    )</code></pre></div></div></figure>
+<p><strong>What is happening here?</strong></p>
+<p><a href="https://triton-lang.org/main/python-api/generated/triton.language.cdiv.html" target="_blank" rel="noopener"><code>triton.cdiv(a, b)</code></a> computes <code>ceil(a / b)</code>. This ensures that a final partial tile still receives a program. The kernel must mask any lanes that fall outside the logical tensor bounds.</p>
+<p>When <code>grid</code> is a function, Triton passes it a dictionary containing the kernel&#x27;s compile-time meta-parameters, such as <code>BN</code>. This lets the grid size depend on the selected block sizes, including values selected by <a href="#1-autotune" target="_blank" rel="noopener">autotuning</a>.</p>
+<h4 id="2-persistent-launch-multiple-output-tiles-per-program" class="anchored"><a class="anchor" href="#2-persistent-launch-multiple-output-tiles-per-program" aria-label="Link to this section">#</a>2. Persistent launch (multiple output tiles per program)</h4>
+<p>A persistent kernel launches a limited number of programs, often bounded by the number of output tiles and chosen relative to the GPU&#x27;s SM count. Each program loops over tiles inside the kernel. See <a href="#optional-when-one-program-processes-multiple-tiles" target="_blank" rel="noopener">when one program processes multiple tiles</a> for how this works in the kernel.</p>
+<h3 id="what-parameters-do-we-send" class="anchored"><a class="anchor" href="#what-parameters-do-we-send" aria-label="Link to this section">#</a>What Parameters Do We Send?</h3>
+<h4 id="input-and-output-tensors" class="anchored"><a class="anchor" href="#input-and-output-tensors" aria-label="Link to this section">#</a>Input and output tensors</h4>
+<p>We pass the input tensors that the kernel reads and preallocated output tensors that it writes.</p>
+<h4 id="number-of-elements-in-each-dimension" class="anchored"><a class="anchor" href="#number-of-elements-in-each-dimension" aria-label="Link to this section">#</a>Number of elements in each dimension</h4>
+<p>The number of elements in a tensor (e.g., 1,000) may not be divisible by its tile size (e.g., 32). The kernel receives the logical dimension and creates a mask such as <code>offs_n &lt; N</code>, preventing lanes in a partial tile from accessing memory outside the vectors.</p>
+<h4 id="strides" class="anchored"><a class="anchor" href="#strides" aria-label="Link to this section">#</a>Strides</h4>
+<p>Stride is the number of elements between adjacent positions along one tensor dimension. For vector addition, the stride is usually <code>1</code> because vectors are commonly contiguous, but a non-contiguous vector may have a different stride. We will talk more about strides in the two-dimensional case.</p>
+<h4 id="static-arguments-tlconstexpr" class="anchored"><a class="anchor" href="#static-arguments-tlconstexpr" aria-label="Link to this section">#</a>Static arguments (<code>tl.constexpr</code>)</h4>
+<p>An argument annotated with <code>tl.constexpr</code> is known at compile time. Triton can use it to specialize generated code, size block-shaped tensors, or remove compile-time branches. Tile sizes are common autotuning targets, while <code>tl.constexpr</code> is also used for algorithm variants and feature flags.</p>
+<h4 id="example-of-launching-a-kernel" class="anchored"><a class="anchor" href="#example-of-launching-a-kernel" aria-label="Link to this section">#</a>Example of launching a kernel</h4>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span></div><div class="code-scroll"><pre><code><span class="t-k">def</span> <span class="t-f">vector_add</span>(a: <span class="t-b">torch</span>.Tensor, b: <span class="t-b">torch</span>.Tensor):
+    <span class="t-c"># ...</span>
+    _vec_add_kernel[grid](
+        a, b, c, <span class="t-c"># a, b as input tensor, c as output tensor</span>
+        N,
+        a.stride(<span class="t-n">0</span>), b.stride(<span class="t-n">0</span>), c.stride(<span class="t-n">0</span>), <span class="t-c"># all 1</span>
+        BN=<span class="t-n">1024</span>, <span class="t-c"># known at compile time; we can autotune it</span>
+    )</code></pre></div></div></figure>
+<h3 id="end-to-end-example-launching-a-vector-add-kernel" class="anchored"><a class="anchor" href="#end-to-end-example-launching-a-vector-add-kernel" aria-label="Link to this section">#</a>End-to-end example: launching a vector add kernel</h3>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span></div><div class="code-scroll"><pre><code><span class="t-k">def</span> <span class="t-f">vector_add</span>(a: <span class="t-b">torch</span>.Tensor, b: <span class="t-b">torch</span>.Tensor):
+    <span class="t-k">assert</span> a.is_cuda <span class="t-k">and</span> b.is_cuda
+    <span class="t-k">assert</span> a.device == b.device
+    <span class="t-k">assert</span> a.ndim == b.ndim == <span class="t-n">1</span>
+    <span class="t-k">assert</span> a.shape == b.shape
+    <span class="t-k">assert</span> a.dtype == b.dtype
+
+    c = <span class="t-b">torch</span>.empty_like(a)
+    N = c.numel()
+
+    grid = <span class="t-k">lambda</span> meta: (<span class="t-b">triton</span>.cdiv(N, meta[<span class="t-s">&quot;BN&quot;</span>]),)
+
+    _vec_add_kernel[grid](
+        a, b, c, <span class="t-c"># a, b as input tensor, c as output tensor</span>
+        N,
+        a.stride(<span class="t-n">0</span>), b.stride(<span class="t-n">0</span>), c.stride(<span class="t-n">0</span>), <span class="t-c"># all 1</span>
+        BN=<span class="t-n">1024</span>, <span class="t-c"># known at compile time; we can autotune it</span>
+    )
+    <span class="t-k">return</span> c</code></pre></div></div></figure>
+<aside class="callout callout--note"><p class="callout-title">Note</p><p>Q. <strong>Is separating the kernel launch from the kernel definition the best approach?</strong></p>
+<p>A. Repeated kernel launches can add overhead. Techniques such as <a href="https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cuda-graphs.html" target="_blank" rel="noopener">CUDA graphs</a> and <a href="https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles" target="_blank" rel="noopener">MegaKernel</a> can mitigate that overhead, but most kernels are still launched from the CPU.</p></aside>
+<h2 id="2-defining-a-kernel" class="anchored"><a class="anchor" href="#2-defining-a-kernel" aria-label="Link to this section">#</a>2. Defining a kernel</h2>
+<p>Until now, we have seen how the host launches a kernel. Before looking at how a Triton kernel is defined, let&#x27;s first go over the two most important abstractions in Triton: tile and program.</p>
+<h3 id="central-abstractions-tile-and-program" class="anchored"><a class="anchor" href="#central-abstractions-tile-and-program" aria-label="Link to this section">#</a>Central abstractions: Tile and Program</h3>
+<p>Consider adding two vectors: C = A + B.</p>
+<p>If the vectors contain one million elements, a Triton kernel usually does not process all one million elements in a single program. Instead, we divide the output into smaller regions and launch multiple instances of the kernel.</p>
+<p>TL;DR: A tile is a region of the data, while a program is an executing kernel instance that processes that region.</p>
+<h4 id="tile" class="anchored"><a class="anchor" href="#tile" aria-label="Link to this section">#</a>Tile</h4>
+<p>A <em>tile</em> is a logical region of the overall problem that is processed together.</p>
+<div class="figure" data-figure><iframe src="assets/01/diagrams/02-tile.html?v=57" title="Tile vs thread" height="407" loading="lazy" scrolling="no"></iframe></div>
+<p>For example, one program might process a block of <code>1024</code> consecutive elements of the vector addition output <code>C</code>.</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">plaintext</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span></div><div class="code-scroll"><pre><code>tile 0: C[   0 : 1024]
+tile 1: C[1024 : 2048]
+tile 2: C[2048 : 3072]
+...</code></pre></div></div></figure>
+<p>A tile is represented by block-shaped offsets, pointers, and values inside the program.</p>
+<p>This differs from CUDA, where the unit of code is a <em>thread</em>: values are scalars, and you index one element at a time.</p>
+<h5 id="tile-vs-block" class="anchored"><a class="anchor" href="#tile-vs-block" aria-label="Link to this section">#</a>Tile vs Block</h5>
+<p>In Triton, <em>tile</em> and <em>block</em> are often used almost interchangeably. Both commonly refer to a group of tensor elements processed together by one program.</p>
+<p>To be concrete,</p>
+<ul><li><strong>Tile</strong> refers to the logical region of the overall tensor or problem.</li><li><strong>Block</strong> refers to the block-shaped offsets, pointers, or values manipulated inside the program.</li></ul>
+<p>For example, a program may be responsible for the tile <code>C[1024:2048]</code>. Inside the program, that tile is represented by blocks of offsets and values containing up to 1024 elements.</p>
+<p>In this note, we use them interchangeably.</p>
+<h4 id="program" class="anchored"><a class="anchor" href="#program" aria-label="Link to this section">#</a>Program</h4>
+<p>A Triton <em>program</em> is one executing instance of a compiled kernel. It is roughly analogous to a CUDA thread block, also called a <a href="https://modal.com/gpu-glossary/device-software/cooperative-thread-array" target="_blank" rel="noopener">CTA</a>.</p>
+<p>The CPU kernel launch shown above creates as many program instances as specified by the grid. For example, if <code>N = 4,096</code> and <code>BN = 1024</code>, four programs are launched.</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">plaintext</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span></div><div class="code-scroll"><pre><code>program 0 → tile 0 → C[   0 : 1024]
+program 1 → tile 1 → C[1024 : 2048]
+program 2 → tile 2 → C[2048 : 3072]
+program 3 → tile 3 → C[3072 : 4096]</code></pre></div></div></figure>
+<div class="figure" data-figure><iframe src="assets/01/diagrams/03-program-1d.html?v=57" title="pid maps to an output tile" height="260" loading="lazy" scrolling="no"></iframe></div>
+<p>Each program receives a program ID (<code>pid</code>) and usually processes a different input or output tile. Triton launch grids have at most three dimensions, matching the grid defined by the host.</p>
+<p>All four programs execute the same kernel code but operate on different data. In fancy terms, we call this <a href="https://en.wikipedia.org/wiki/Single_program,_multiple_data" target="_blank" rel="noopener">SPMD</a>.</p>
+<p>Now that we&#x27;ve covered the two central abstractions, let&#x27;s see how a kernel is defined and run on the GPU.</p>
+<p>At a high level, each program follows these steps:</p>
+<ol><li>Read the program ID and determine which output tile the program owns.</li><li>Construct the tile’s global element offsets.</li><li>Use those offsets to form input and output pointers.</li><li>Load the input blocks.</li><li>Compute the output block.</li><li>Store the output block.</li></ol>
+<h3 id="typical-kernel-parameters" class="anchored"><a class="anchor" href="#typical-kernel-parameters" aria-label="Link to this section">#</a>Typical Kernel Parameters</h3>
+<p>Triton kernels receive runtime arguments and configuration metadata from the host code described in the previous section, including:</p>
+<ul><li><strong>Input and output pointers:</strong> PyTorch tensors passed at launch become pointers to their GPU storage.</li><li><strong>Logical dimensions:</strong> sizes used for iteration and masks.</li><li><strong>Strides:</strong> element offsets used to map multidimensional indices to memory locations.</li><li><strong>Runtime scalar values:</strong> optional values such as a dropout probability or scaling factor.</li><li><strong>Compile-time meta-parameters:</strong> <code>tl.constexpr</code> values such as tile sizes or feature flags.</li></ul>
+<h4 id="example" class="anchored"><a class="anchor" href="#example" aria-label="Link to this section">#</a>Example</h4>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span></div><div class="code-scroll"><pre><code><span class="t-d">@triton.jit</span>
+<span class="t-k">def</span> <span class="t-f">_vec_add_kernel</span>(
+    a_ptr, b_ptr, c_ptr,
+    N,
+    stride_a, stride_b, stride_c,
+    BN: <span class="t-b">tl</span>.constexpr,
+):
+    <span class="t-c"># ...</span></code></pre></div></div></figure>
+<h3 id="1-read-the-program-id-and-determine-which-output-tile-the-program-owns" class="anchored"><a class="anchor" href="#1-read-the-program-id-and-determine-which-output-tile-the-program-owns" aria-label="Link to this section">#</a>1. Read the program ID and determine which output tile the program owns</h3>
+<h4 id="program-id" class="anchored"><a class="anchor" href="#program-id" aria-label="Link to this section">#</a>Program ID</h4>
+<p>A program ID, or <code>pid</code>, identifies a program along one launch-grid axis through <code>tl.program_id(axis)</code>. The kernel uses it to determine which tile that program processes.</p>
+<aside class="callout callout--note"><p class="callout-title">Note</p><p><strong>What does it mean by <em>&quot;along one launch-grid axis&quot;</em>?</strong></p>
+<p>Like CUDA, Triton&#x27;s launch grid can be 1D, 2D, or 3D. The grid shape determines the range of program IDs along each axis.</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span></div><div class="code-scroll"><pre><code>_matmul_kernel[(num_pid_m, num_pid_n)](...)</code></pre></div></div></figure>
+<p>If the grid is launched with two dimensions, <code>tl.program_id(axis=0)</code> selects an M tile and <code>tl.program_id(axis=1)</code> selects an N tile. The matmul kernel in these notes uses this 2D mapping directly and reads both axes.</p>
+<p>A 1D grid is convenient when a kernel flattens its logical work into one tile index. A 2D or 3D grid can instead map independent dimensions directly, such as M/N tiles for matmul or batch/head/tile dimensions for attention.</p></aside>
+<h4 id="example-1" class="anchored"><a class="anchor" href="#example-1" aria-label="Link to this section">#</a>Example</h4>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span></div><div class="code-scroll"><pre><code><span class="t-d">@triton.jit</span>
+<span class="t-k">def</span> <span class="t-f">_vec_add_kernel</span>(
+    <span class="t-c"># ...</span>
+):
+    pid = <span class="t-b">tl</span>.program_id(axis=<span class="t-n">0</span>)</code></pre></div></div></figure>
+<p>Here we use <code>axis=0</code> because the host launched a one-dimensional grid.</p>
+<h3 id="2-construct-the-tiles-global-element-offsets" class="anchored"><a class="anchor" href="#2-construct-the-tiles-global-element-offsets" aria-label="Link to this section">#</a>2. Construct the tile’s global element offsets</h3>
+<p>Local offsets are indices within the tile, ranging from <code>0</code> to <code>tile_size - 1</code>. We simply use <code>tl.arange</code> (just like <code>np.arange</code> or <code>torch.arange</code>) to create the array.</p>
+<aside class="callout callout--note"><p class="callout-title">Note</p><p>Block sizes used as the endpoint of <a href="https://triton-lang.org/main/python-api/generated/triton.language.arange.html" target="_blank" rel="noopener"><code>tl.arange</code></a> must satisfy its power-of-two constraints. For the common form <code>tl.arange(0, BN)</code>, choose a power-of-two <code>BN</code>, such as <code>128</code>, <code>256</code>, or <code>1024</code>, rather than an arbitrary value such as <code>1000</code>.</p></aside>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span></div><div class="code-scroll"><pre><code>local_offs_n = <span class="t-b">tl</span>.arange(<span class="t-n">0</span>, BN)</code></pre></div></div></figure>
+<p>To locate the tile within the full tensor, we incorporate the program ID. In practice, kernels commonly construct global offsets directly:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span></div><div class="code-scroll"><pre><code>offs_n = pid * BN + <span class="t-b">tl</span>.arange(<span class="t-n">0</span>, BN)</code></pre></div></div></figure>
+<p>What does this mean? Since each program processes a tile of size <code>BN</code>, we multiply it by <code>pid</code> to locate that program&#x27;s block. So <code>offs_n</code> ranges from <code>pid * BN</code> to <code>(pid + 1) * BN - 1</code>.</p>
+<p>For example, if <code>BN = 1024</code> and <code>pid = 3</code>, <code>offs_n</code> is:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">plaintext</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span></div><div class="code-scroll"><pre><code>3 * 1024 + tl.arange(0, 1024) == [3072, 3073, 3074, 3075, ..., 4095]</code></pre></div></div></figure>
+<p>These lines construct block-shaped tensors of output coordinates. The coordinates are later combined with base address and strides to construct pointers for <code>A</code>, <code>B</code>, and <code>C</code>.</p>
+<h4 id="masking" class="anchored"><a class="anchor" href="#masking" aria-label="Link to this section">#</a>Masking</h4>
+<p>As explained, masks allow a regular block-shaped program to safely handle the final partial tile. A mask is usually applied to the global offsets.</p>
+<div class="figure" data-figure><iframe src="assets/01/diagrams/04-masking.html?v=57" title="Masking" height="398" loading="lazy" scrolling="no"></iframe></div>
+<h4 id="example-2" class="anchored"><a class="anchor" href="#example-2" aria-label="Link to this section">#</a>Example</h4>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span></div><div class="code-scroll"><pre><code><span class="t-d">@triton.jit</span>
+<span class="t-k">def</span> <span class="t-f">_vec_add_kernel</span>(
+    <span class="t-c"># ...</span>
+):
+    <span class="t-c"># ...</span>
+    offs_n = pid * BN + <span class="t-b">tl</span>.arange(<span class="t-n">0</span>, BN)
+    n_mask = offs_n &lt; N</code></pre></div></div></figure>
+<p>This way, even if <code>N</code> is not a multiple of <code>BN</code>, the final partial tile can be masked correctly.</p>
+<h3 id="3-use-those-offsets-to-form-input-and-output-pointers" class="anchored"><a class="anchor" href="#3-use-those-offsets-to-form-input-and-output-pointers" aria-label="Link to this section">#</a>3. Use those offsets to form input and output pointers</h3>
+<p>Once we have the global offsets, we map the logical indices to memory pointers. These are the final memory addresses we will use to load the tensor elements.</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span></div><div class="code-scroll"><pre><code><span class="t-d">@triton.jit</span>
+<span class="t-k">def</span> <span class="t-f">_vec_add_kernel</span>(
+    a_ptr, b_ptr, c_ptr,
+    <span class="t-c"># ...</span>
+):
+    <span class="t-c"># ...</span>
+    a_ptrs = a_ptr + offs_n * stride_a
+    b_ptrs = b_ptr + offs_n * stride_b
+    c_ptrs = c_ptr + offs_n * stride_c</code></pre></div></div></figure>
+<h3 id="4-load-the-input-blocks" class="anchored"><a class="anchor" href="#4-load-the-input-blocks" aria-label="Link to this section">#</a>4. Load the input blocks</h3>
+<div class="figure" data-figure><iframe src="assets/01/diagrams/05-load-store.html?v=57" title="Load and store" height="390" loading="lazy" scrolling="no"></iframe></div>
+<p>Input tensors normally already reside in GPU global memory before the kernel begins. A Triton kernel reads values with <code>tl.load</code>, computes on them using on-chip resources (typically registers), and writes results back with <code>tl.store</code>. The compiler and hardware manage lower-level movement through the cache hierarchy.</p>
+<p>We use the mask we&#x27;ve created here as well to mask off elements outside the bounds.</p>
+<p>The <code>other</code> argument supplies a value for masked-out loads. We usually use <code>0.0</code> or <code>-float(&quot;inf&quot;)</code> depending on the context. For example, vector addition can simply use <code>0.0</code>.</p>
+<p><strong>Example</strong></p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span></div><div class="code-scroll"><pre><code><span class="t-d">@triton.jit</span>
+<span class="t-k">def</span> <span class="t-f">_vec_add_kernel</span>(
+    a_ptr, b_ptr,
+    <span class="t-c"># ...</span>
+):
+    <span class="t-c"># ...</span>
+    a_ptrs = a_ptr + offs_n * stride_a
+    b_ptrs = b_ptr + offs_n * stride_b
+    a = <span class="t-b">tl</span>.load(a_ptrs, mask=n_mask, other=<span class="t-n">0.0</span>)
+    b = <span class="t-b">tl</span>.load(b_ptrs, mask=n_mask, other=<span class="t-n">0.0</span>)</code></pre></div></div></figure>
+<h3 id="5-compute-the-output-block" class="anchored"><a class="anchor" href="#5-compute-the-output-block" aria-label="Link to this section">#</a>5. Compute the output block</h3>
+<p>In Triton, computation is pretty high-level. More complex kernels may require additional operations, but many computations are expressed using basic arithmetic or matrix multiplication (<code>tl.dot</code>). Vector addition is dead simple:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span></div><div class="code-scroll"><pre><code><span class="t-d">@triton.jit</span>
+<span class="t-k">def</span> <span class="t-f">_vec_add_kernel</span>(
+    a_ptr, b_ptr,
+    <span class="t-c"># ...</span>
+):
+    <span class="t-c"># ...</span>
+    a_ptrs = a_ptr + offs_n * stride_a
+    b_ptrs = b_ptr + offs_n * stride_b
+    a = <span class="t-b">tl</span>.load(a_ptrs, mask=n_mask, other=<span class="t-n">0.0</span>)
+    b = <span class="t-b">tl</span>.load(b_ptrs, mask=n_mask, other=<span class="t-n">0.0</span>)
+    c = a + b</code></pre></div></div></figure>
+<h3 id="6-store-the-output-block" class="anchored"><a class="anchor" href="#6-store-the-output-block" aria-label="Link to this section">#</a>6. Store the output block</h3>
+<p>After we&#x27;ve loaded and computed the values, we need to store them back in device memory. We need the pointers that specify where to store them, the value to store (<code>c</code>), and the mask.</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span></div><div class="code-scroll"><pre><code><span class="t-d">@triton.jit</span>
+<span class="t-k">def</span> <span class="t-f">_vec_add_kernel</span>(
+    a_ptr, b_ptr, c_ptr,
+    <span class="t-c"># ...</span>
+):
+    <span class="t-c"># ...</span>
+    c = a + b
+    c_ptrs = c_ptr + offs_n * stride_c
+    <span class="t-b">tl</span>.store(c_ptrs, c, mask=n_mask)</code></pre></div></div></figure>
+<h3 id="end-to-end-example-of-a-vector-addition-kernel" class="anchored"><a class="anchor" href="#end-to-end-example-of-a-vector-addition-kernel" aria-label="Link to this section">#</a>End-to-end example of a vector addition kernel</h3>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span></div><div class="code-scroll"><pre><code><span class="t-d">@triton.jit</span>
+<span class="t-k">def</span> <span class="t-f">_vec_add_kernel</span>(
+    a_ptr, b_ptr, c_ptr,
+    N,
+    stride_a, stride_b, stride_c,
+    BN: <span class="t-b">tl</span>.constexpr
+):
+    pid = <span class="t-b">tl</span>.program_id(axis=<span class="t-n">0</span>)
+    offs_n = pid * BN + <span class="t-b">tl</span>.arange(<span class="t-n">0</span>, BN)
+    n_mask = offs_n &lt; N
+    a_ptrs = a_ptr + offs_n * stride_a
+    b_ptrs = b_ptr + offs_n * stride_b
+
+    a = <span class="t-b">tl</span>.load(a_ptrs, mask=n_mask, other=<span class="t-n">0.0</span>)
+    b = <span class="t-b">tl</span>.load(b_ptrs, mask=n_mask, other=<span class="t-n">0.0</span>)
+    c = a + b
+
+    c_ptrs = c_ptr + offs_n * stride_c
+    <span class="t-b">tl</span>.store(c_ptrs, c, mask=n_mask)</code></pre></div></div></figure>
+<h2 id="2d-and-beyond" class="anchored"><a class="anchor" href="#2d-and-beyond" aria-label="Link to this section">#</a>2D and beyond</h2>
+<p>We&#x27;ve seen the most basic kernel as an exercise. Now let&#x27;s move one step forward and deal with two-dimensional scenarios.</p>
+<p>Many operations in deep learning, including matmul, use tiles with two or more dimensions. We will go over the same path again while introducing additional things to consider when dealing with multi-dimensional arrays. For the parts already explained, I won&#x27;t repeat myself.</p>
+<aside class="callout callout--note"><p class="callout-title">Note</p><p>What is Matrix Multiplication?</p>
+<p>Before we move on, let&#x27;s understand what matrix multiplication is. My favorite intuitive definition is: multiply and add (MAC) elements from the rows of A and the columns of B, where A has shape <code>[M, K]</code> and B has shape <code>[K, N]</code>.</p>
+<p>Element-wise, this means multiplying and adding <code>K</code> pairs because each row of A and each column of B contains <code>K</code> elements. By convention, one MAC counts as two FLOPs, so each output element requires approximately <code>2K</code> FLOPs. With <code>M × N</code> output elements, matrix multiplication requires approximately <code>2MNK</code> FLOPs!</p></aside>
+<h3 id="launching-a-matmul-kernel" class="anchored"><a class="anchor" href="#launching-a-matmul-kernel" aria-label="Link to this section">#</a>Launching a matmul kernel</h3>
+<p>As we&#x27;ve seen above, we validate, set grid size, and launch the kernel:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span><span>20</span><span>21</span><span>22</span><span>23</span><span>24</span><span>25</span></div><div class="code-scroll"><pre><code><span class="t-k">def</span> <span class="t-f">matmul</span>(a: <span class="t-b">torch</span>.Tensor, b: <span class="t-b">torch</span>.Tensor):
+    <span class="t-k">assert</span> a.is_cuda <span class="t-k">and</span> b.is_cuda
+    <span class="t-k">assert</span> a.device == b.device
+    <span class="t-k">assert</span> a.ndim == <span class="t-n">2</span> <span class="t-k">and</span> b.ndim == <span class="t-n">2</span>
+    <span class="t-k">assert</span> a.shape[<span class="t-n">1</span>] == b.shape[<span class="t-n">0</span>] <span class="t-c"># K dimensions must match</span>
+    <span class="t-k">assert</span> a.dtype == b.dtype == <span class="t-b">torch</span>.float16
+
+    M, K = a.shape
+    _, N = b.shape
+    c = <span class="t-b">torch</span>.empty((M, N), device=a.device, dtype=a.dtype)
+
+    grid = <span class="t-k">lambda</span> meta: (
+        <span class="t-b">triton</span>.cdiv(M, meta[<span class="t-s">&quot;BM&quot;</span>]),
+        <span class="t-b">triton</span>.cdiv(N, meta[<span class="t-s">&quot;BN&quot;</span>]),
+    )
+
+    _matmul_kernel[grid](
+        a, b, c,
+        M, N, K,
+        a.stride(<span class="t-n">0</span>), a.stride(<span class="t-n">1</span>),
+        b.stride(<span class="t-n">0</span>), b.stride(<span class="t-n">1</span>),
+        c.stride(<span class="t-n">0</span>), c.stride(<span class="t-n">1</span>),
+        BM=<span class="t-n">32</span>, BN=<span class="t-n">32</span>, BK=<span class="t-n">32</span>,
+    )
+    <span class="t-k">return</span> c</code></pre></div></div></figure>
+<h4 id="strides-1" class="anchored"><a class="anchor" href="#strides-1" aria-label="Link to this section">#</a>Strides</h4>
+<p>Notice we pass two strides for each tensor because <code>A</code>, <code>B</code>, and <code>C</code> are all two-dimensional: one stride for moving between rows and another for moving between columns.</p>
+<p>Consider a <a href="https://en.wikipedia.org/wiki/Row-_and_column-major_order" target="_blank" rel="noopener">row-major</a> matrix <code>A</code> with shape <code>[M, K]</code>. Moving one column advances by one element, while moving one row skips over <code>K</code> elements. Therefore, when <code>A</code> is contiguous, its strides are <code>(K, 1)</code>.</p>
+<p>Most of the time, tensors sent to kernels are created contiguously. However, a transposed tensor or another view may have a different memory layout. Passing <code>a.stride(0)</code> and <code>a.stride(1)</code> allows the kernel to use the correct row and column jumps in either case. See the diagram below.</p>
+<div class="figure" data-figure><iframe src="assets/01/diagrams/06-strides.html?v=57" title="Strided pointer" height="454" loading="lazy" scrolling="no"></iframe></div>
+<aside class="callout callout--note"><p class="callout-title"><code>.stride()</code> vs. <code>.contiguous()</code></p><p>A kernel can accept explicit strides and support compatible non-contiguous layouts. Alternatively, its wrapper can call <code>.contiguous()</code>, allowing the kernel to assume a simpler layout. For example, <code>(K, 1)</code> for a contiguous <code>[M, K]</code> matrix.</p>
+<p>Passing the tensor’s actual strides avoids an unnecessary copy when the input is non-contiguous. In contrast, <code>.contiguous()</code> may allocate and materialize a contiguous copy, although it returns the original tensor without copying when the layout is already contiguous.</p></aside>
+<h3 id="defining-a-matmul-kernel" class="anchored"><a class="anchor" href="#defining-a-matmul-kernel" aria-label="Link to this section">#</a>Defining a matmul kernel</h3>
+<p>As usual, we first receive all the parameters sent by the host launch.</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span></div><div class="code-scroll"><pre><code><span class="t-d">@triton.jit</span>
+<span class="t-k">def</span> <span class="t-f">_matmul_kernel</span>(
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    stride_a_m, stride_a_k,
+    stride_b_k, stride_b_n,
+    stride_c_m, stride_c_n,
+    BM: <span class="t-b">tl</span>.constexpr,
+    BN: <span class="t-b">tl</span>.constexpr,
+    BK: <span class="t-b">tl</span>.constexpr,
+):</code></pre></div></div></figure>
+<h4 id="1-read-the-program-ids-and-determine-which-output-tile-the-program-owns" class="anchored"><a class="anchor" href="#1-read-the-program-ids-and-determine-which-output-tile-the-program-owns" aria-label="Link to this section">#</a>1. Read the program IDs and determine which output tile the program owns</h4>
+<p>Since we launched a two-dimensional grid, program instances are also coordinated along two dimensions.</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span></div><div class="code-scroll"><pre><code>    pid_m = <span class="t-b">tl</span>.program_id(axis=<span class="t-n">0</span>)
+    pid_n = <span class="t-b">tl</span>.program_id(axis=<span class="t-n">1</span>)</code></pre></div></div></figure>
+<div class="figure" data-figure><iframe src="assets/01/diagrams/07-pid-to-tile.html?v=57" title="pid_m and pid_n map to an output tile" height="560" loading="lazy" scrolling="no"></iframe></div>
+<h5 id="optional-when-one-program-processes-multiple-tiles" class="anchored"><a class="anchor" href="#optional-when-one-program-processes-multiple-tiles" aria-label="Link to this section">#</a>Optional: When one program processes multiple tiles</h5>
+<p>The matmul kernel above uses a straightforward mapping: the host launches one program for every output tile, and <code>pid_m</code> and <code>pid_n</code> identify that tile directly.</p>
+<p>Another option is a <strong>persistent-style launch</strong>, where the host launches fewer programs than there are output tiles. Each program then processes several tiles in a loop. This is where <code>tl.num_programs(axis)</code> becomes useful: it returns the number of programs launched along an axis, which determines how far each program advances through the tile list.</p>
+<p>For a 1D launch grid, we can flatten the two-dimensional output-tile grid into a single sequence:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span></div><div class="code-scroll"><pre><code>start_tile = <span class="t-b">tl</span>.program_id(axis=<span class="t-n">0</span>)
+num_programs = <span class="t-b">tl</span>.num_programs(axis=<span class="t-n">0</span>)
+
+num_pid_m = <span class="t-b">tl</span>.cdiv(M, BM)
+num_pid_n = <span class="t-b">tl</span>.cdiv(N, BN)
+num_tiles = num_pid_m * num_pid_n
+
+<span class="t-k">for</span> tile_id <span class="t-k">in</span> <span class="t-b">tl</span>.<span class="t-b">range</span>(start_tile, num_tiles, num_programs):
+    pid_m = tile_id // num_pid_n
+    pid_n = tile_id % num_pid_n
+
+    <span class="t-c"># Compute the output tile C[pid_m, pid_n].</span>
+    <span class="t-c"># ...</span></code></pre></div></div></figure>
+<p>Program <code>0</code> starts with tile <code>0</code>, program <code>1</code> starts with tile <code>1</code>, and so on. After processing its first tile, each program advances by <code>num_programs</code>.</p>
+<p>For example, if four programs are launched for sixteen output tiles, program <code>0</code> processes tiles <code>0</code>, <code>4</code>, <code>8</code>, and <code>12</code>. The diagram below illustrates this assignment.</p>
+<div class="figure" data-figure><iframe src="assets/01/diagrams/08-persistent.html?v=57" title="Persistent programs" height="290" loading="lazy" scrolling="no"></iframe></div>
+<p>The host must explicitly choose this smaller launch grid. <code>tl.num_programs()</code> only reports how many programs were launched; it does not make the kernel persistent by itself.</p>
+<h4 id="2-construct-the-tiles-global-element-offsets-1" class="anchored"><a class="anchor" href="#2-construct-the-tiles-global-element-offsets-1" aria-label="Link to this section">#</a>2. Construct the tile’s global element offsets</h4>
+<p>Next, get the global offsets for each dimension:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span></div><div class="code-scroll"><pre><code>    offs_m = pid_m * BM + <span class="t-b">tl</span>.arange(<span class="t-n">0</span>, BM)
+    offs_n = pid_n * BN + <span class="t-b">tl</span>.arange(<span class="t-n">0</span>, BN)
+    offs_k = <span class="t-b">tl</span>.arange(<span class="t-n">0</span>, BK)</code></pre></div></div></figure>
+<h4 id="3-use-those-offsets-to-form-input-and-output-pointers-1" class="anchored"><a class="anchor" href="#3-use-those-offsets-to-form-input-and-output-pointers-1" aria-label="Link to this section">#</a>3. Use those offsets to form input and output pointers</h4>
+<p>Then form the addresses by adding those offsets to the pointers:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span></div><div class="code-scroll"><pre><code>    a_ptrs = (
+        a_ptr
+        + offs_m[:, <span class="t-n">None</span>] * stride_a_m
+        + offs_k[<span class="t-n">None</span>, :] * stride_a_k
+    )
+    b_ptrs = (
+        b_ptr
+        + offs_k[:, <span class="t-n">None</span>] * stride_b_k
+        + offs_n[<span class="t-n">None</span>, :] * stride_b_n
+    )</code></pre></div></div></figure>
+<p>What do <code>[:, None]</code> and <code>[None, :]</code> mean? To understand this, we should brush up on how broadcasting works in array programming. Feel free to skip this section if you&#x27;re already fluent with the notation!</p>
+<h5 id="broadcasting" class="anchored"><a class="anchor" href="#broadcasting" aria-label="Link to this section">#</a>Broadcasting</h5>
+<p><strong>Broadcasting</strong> allows tensors with different shapes to participate in the same element-wise operation. When a dimension of size <code>1</code> is matched with a larger dimension, its values behave as though they were copied across that dimension. Note that this expansion is logical—no larger tensor needs to be allocated or materialized in memory. NumPy, PyTorch, and Triton compare shapes from the rightmost dimension to the left.</p>
+<p>Two dimensions are compatible when, comparing from the rightmost dimension:</p>
+<ol><li>They are equal;</li><li>One of them is <code>1</code>; or</li><li>One shape has fewer dimensions, in which case the missing leading dimensions are treated as <code>1</code>.</li></ol>
+<p>Based on this rule, let&#x27;s go through some examples:</p>
+<p>For A of shape <code>[3, 4]</code>:</p>
+<ul><li><code>[3, 4]</code> is compatible because the shapes are equal.</li><li><code>[1, 4]</code> is compatible because the rightmost dimensions are equal and the leading <code>1</code> expands to <code>3</code>.</li><li><code>[1, 1]</code> is compatible because each dimension of size <code>1</code> expands to match <code>[3, 4]</code>.</li><li><code>[1, 2]</code> is incompatible because the rightmost dimensions, <code>4</code> and <code>2</code>, are neither equal nor <code>1</code>.</li></ul>
+<div class="figure" data-figure><iframe src="assets/01/diagrams/09-broadcasting.html?v=57" title="Broadcasting" height="299" loading="lazy" scrolling="no"></iframe></div>
+<p>In a matmul kernel, broadcasting turns the M and K coordinate vectors into an M-by-K pointer tile for <code>A</code>:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">text</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span></div><div class="code-scroll"><pre><code>offs_m[:, None] : (BM, 1)
+offs_k[None, :] : (1, BK)
+combined        : (BM, BK)</code></pre></div></div></figure>
+<p>The same idea constructs the K-by-N pointer tile for <code>B</code>:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">plaintext</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span></div><div class="code-scroll"><pre><code>offs_k[:, None] : (BK, 1)
+offs_n[None, :] : (1, BN)
+combined        : (BK, BN)</code></pre></div></div></figure>
+<p>Since <code>[B0, 1]</code> and <code>[1, B1]</code> are compatible, Triton broadcasts both into <code>[B0, B1]</code>. No expanded index arrays need to be materialized in global memory.</p>
+<h5 id="expanding-dimensions-for-broadcasting" class="anchored"><a class="anchor" href="#expanding-dimensions-for-broadcasting" aria-label="Link to this section">#</a>Expanding dimensions for broadcasting</h5>
+<p>In Triton, you can explicitly use <code>tl.expand_dims(offs_m, axis)</code> or <code>tl.unsqueeze(offs_m, axis)</code>. However, we usually use <code>:</code> and <code>None</code> to express this:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span></div><div class="code-scroll"><pre><code>offs_m[:, <span class="t-n">None</span>]  <span class="t-c"># column shape (BM, 1)</span></code></pre></div></div></figure>
+<p>This takes all M coordinates and inserts a new trailing dimension, producing one column.</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span></div><div class="code-scroll"><pre><code>offs_k[<span class="t-n">None</span>, :]  <span class="t-c"># row shape (1, BK)</span></code></pre></div></div></figure>
+<p>This takes all K coordinates and inserts a new leading dimension, producing one row.</p>
+<h5 id="strided-pointers" class="anchored"><a class="anchor" href="#strided-pointers" aria-label="Link to this section">#</a>Strided Pointers</h5>
+<p>An intuitive way to understand multidimensional pointer arithmetic is to consider one axis at a time. The indices along an axis tell us how many steps to take, while its stride tells us how many memory elements each step moves. Multiplying them gives that axis’s contribution to the final memory offset. Broadcasting then combines the contributions from every axis to produce a pointer for each coordinate in the tile.</p>
+<p>For example,</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span></div><div class="code-scroll"><pre><code>a_ptrs = (
+    a_ptr
+    + offs_m[:, <span class="t-n">None</span>] * stride_a_m
+    + offs_k[<span class="t-n">None</span>, :] * stride_a_k
+)</code></pre></div></div></figure>
+<p><code>offs_m[:, None] * stride_a_m</code> computes the row contribution and broadcasts it across every column. Meanwhile, <code>offs_k[None, :] * stride_a_k</code> computes the column contribution and broadcasts it across every row. Adding them to <code>a_ptr</code> produces the complete M-by-K grid of pointers.</p>
+<h4 id="4-load-the-input-blocks-1" class="anchored"><a class="anchor" href="#4-load-the-input-blocks-1" aria-label="Link to this section">#</a>4. Load the input blocks</h4>
+<p>At this point, the program owns a <code>BM × BN</code> tile of the output. Computing that tile requires accumulation across the entire K dimension. Rather than loading all of K at once, the program processes it in chunks of <code>BK</code> elements while keeping the partial result in <code>accumulator</code>. <code>accumulator</code> is set to <code>tl.float32</code> for numerical precision and later cast to <code>tl.float16</code> after the loop.</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span></div><div class="code-scroll"><pre><code>    accumulator = <span class="t-b">tl</span>.zeros((BM, BN), dtype=<span class="t-b">tl</span>.float32)
+    <span class="t-k">for</span> k_tile <span class="t-k">in</span> <span class="t-b">range</span>(<span class="t-n">0</span>, <span class="t-b">tl</span>.cdiv(K, BK)):
+        k = k_tile * BK + offs_k
+        a = <span class="t-b">tl</span>.load(
+            a_ptrs,
+            mask=(offs_m[:, <span class="t-n">None</span>] &lt; M) &amp; (k[<span class="t-n">None</span>, :] &lt; K),
+            other=<span class="t-n">0.0</span>,
+        )
+        b = <span class="t-b">tl</span>.load(
+            b_ptrs,
+            mask=(k[:, <span class="t-n">None</span>] &lt; K) &amp; (offs_n[<span class="t-n">None</span>, :] &lt; N),
+            other=<span class="t-n">0.0</span>,
+        )</code></pre></div></div></figure>
+<p>Each iteration loads a <code>BM × BK</code> tile from <code>A</code> and a <code>BK × BN</code> tile from <code>B</code>. Their masks are constructed using the same broadcasting pattern as their pointers.</p>
+<h4 id="5-compute-the-output-block-1" class="anchored"><a class="anchor" href="#5-compute-the-output-block-1" aria-label="Link to this section">#</a>5. Compute the output block</h4>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span></div><div class="code-scroll"><pre><code>        accumulator = <span class="t-b">tl</span>.dot(a, b, acc=accumulator)
+        a_ptrs += BK * stride_a_k
+        b_ptrs += BK * stride_b_k</code></pre></div></div></figure>
+<p><code>tl.dot</code> adds the current K chunk’s contribution to <code>accumulator</code>, after which the pointers advance to the next K chunk.</p>
+<h4 id="6-store-the-output-block-1" class="anchored"><a class="anchor" href="#6-store-the-output-block-1" aria-label="Link to this section">#</a>6. Store the output block</h4>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span></div><div class="code-scroll"><pre><code>    c = accumulator.to(<span class="t-b">tl</span>.float16)
+    c_ptrs = (
+        c_ptr
+        + offs_m[:, <span class="t-n">None</span>] * stride_c_m
+        + offs_n[<span class="t-n">None</span>, :] * stride_c_n
+    )
+    c_mask = (offs_m[:, <span class="t-n">None</span>] &lt; M) &amp; (offs_n[<span class="t-n">None</span>, :] &lt; N)
+    <span class="t-b">tl</span>.store(c_ptrs, c, mask=c_mask)</code></pre></div></div></figure>
+<p>With these pieces in place, let&#x27;s put the matmul host launch and Triton kernel together.</p>
+<p>The host-side kernel launch looks like this:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span><span>20</span><span>21</span><span>22</span><span>23</span><span>24</span></div><div class="code-scroll"><pre><code><span class="t-k">def</span> <span class="t-f">matmul</span>(a: <span class="t-b">torch</span>.Tensor, b: <span class="t-b">torch</span>.Tensor):
+    <span class="t-k">assert</span> a.is_cuda <span class="t-k">and</span> b.is_cuda
+    <span class="t-k">assert</span> a.device == b.device
+    <span class="t-k">assert</span> a.ndim == <span class="t-n">2</span> <span class="t-k">and</span> b.ndim == <span class="t-n">2</span>
+    <span class="t-k">assert</span> a.shape[<span class="t-n">1</span>] == b.shape[<span class="t-n">0</span>]
+    <span class="t-k">assert</span> a.dtype == b.dtype == <span class="t-b">torch</span>.float16
+
+    M, K = a.shape
+    _, N = b.shape
+    c = <span class="t-b">torch</span>.empty((M, N), device=a.device, dtype=a.dtype)
+
+    grid = <span class="t-k">lambda</span> meta: (
+        <span class="t-b">triton</span>.cdiv(M, meta[<span class="t-s">&quot;BM&quot;</span>]),
+        <span class="t-b">triton</span>.cdiv(N, meta[<span class="t-s">&quot;BN&quot;</span>]),
+    )
+    _matmul_kernel[grid](
+        a, b, c,
+        M, N, K,
+        a.stride(<span class="t-n">0</span>), a.stride(<span class="t-n">1</span>),
+        b.stride(<span class="t-n">0</span>), b.stride(<span class="t-n">1</span>),
+        c.stride(<span class="t-n">0</span>), c.stride(<span class="t-n">1</span>),
+        BM=<span class="t-n">32</span>, BN=<span class="t-n">32</span>, BK=<span class="t-n">32</span>,
+    )
+    <span class="t-k">return</span> c</code></pre></div></div></figure>
+<p>The matmul kernel (without <a href="https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html#l2-cache-optimizations" target="_blank" rel="noopener">L2 cache optimizations</a>) looks like:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span><span>20</span><span>21</span><span>22</span><span>23</span><span>24</span><span>25</span><span>26</span><span>27</span><span>28</span><span>29</span><span>30</span><span>31</span><span>32</span><span>33</span><span>34</span><span>35</span><span>36</span><span>37</span><span>38</span><span>39</span><span>40</span><span>41</span><span>42</span><span>43</span><span>44</span><span>45</span><span>46</span><span>47</span><span>48</span><span>49</span><span>50</span><span>51</span><span>52</span><span>53</span><span>54</span><span>55</span></div><div class="code-scroll"><pre><code><span class="t-d">@triton.jit</span>
+<span class="t-k">def</span> <span class="t-f">_matmul_kernel</span>(
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    stride_a_m, stride_a_k,
+    stride_b_k, stride_b_n,
+    stride_c_m, stride_c_n,
+    BM: <span class="t-b">tl</span>.constexpr, BN: <span class="t-b">tl</span>.constexpr, BK: <span class="t-b">tl</span>.constexpr,
+):
+    pid_m = <span class="t-b">tl</span>.program_id(axis=<span class="t-n">0</span>)
+    pid_n = <span class="t-b">tl</span>.program_id(axis=<span class="t-n">1</span>)
+
+    offs_m = pid_m * BM + <span class="t-b">tl</span>.arange(<span class="t-n">0</span>, BM)
+    offs_n = pid_n * BN + <span class="t-b">tl</span>.arange(<span class="t-n">0</span>, BN)
+    offs_k = <span class="t-b">tl</span>.arange(<span class="t-n">0</span>, BK)
+
+    a_ptrs = (
+        a_ptr
+        + offs_m[:, <span class="t-n">None</span>] * stride_a_m
+        + offs_k[<span class="t-n">None</span>, :] * stride_a_k
+    )
+    b_ptrs = (
+        b_ptr
+        + offs_k[:, <span class="t-n">None</span>] * stride_b_k
+        + offs_n[<span class="t-n">None</span>, :] * stride_b_n
+    )
+
+    accumulator = <span class="t-b">tl</span>.zeros(
+        (BM, BN),
+        dtype=<span class="t-b">tl</span>.float32,
+    )
+    <span class="t-k">for</span> k_tile <span class="t-k">in</span> <span class="t-b">range</span>(<span class="t-n">0</span>, <span class="t-b">tl</span>.cdiv(K, BK)):
+        k = k_tile * BK + offs_k
+        a = <span class="t-b">tl</span>.load(
+            a_ptrs,
+            mask=(offs_m[:, <span class="t-n">None</span>] &lt; M) &amp; (k[<span class="t-n">None</span>, :] &lt; K),
+            other=<span class="t-n">0.0</span>,
+        )
+        b = <span class="t-b">tl</span>.load(
+            b_ptrs,
+            mask=(k[:, <span class="t-n">None</span>] &lt; K) &amp; (offs_n[<span class="t-n">None</span>, :] &lt; N),
+            other=<span class="t-n">0.0</span>,
+        )
+        accumulator = <span class="t-b">tl</span>.dot(a, b, acc=accumulator)
+        a_ptrs += BK * stride_a_k
+        b_ptrs += BK * stride_b_k
+
+    c = accumulator.to(<span class="t-b">tl</span>.float16)
+    c_ptrs = (
+        c_ptr
+        + offs_m[:, <span class="t-n">None</span>] * stride_c_m
+        + offs_n[<span class="t-n">None</span>, :] * stride_c_n
+    )
+    c_mask = (offs_m[:, <span class="t-n">None</span>] &lt; M) &amp; (offs_n[<span class="t-n">None</span>, :] &lt; N)
+    <span class="t-b">tl</span>.store(c_ptrs, c, mask=c_mask)</code></pre></div></div></figure>
+<p>That&#x27;s it!</p>
+<h3 id="selecting-configurations" class="anchored"><a class="anchor" href="#selecting-configurations" aria-label="Link to this section">#</a>Selecting Configurations</h3>
+<p>While Triton raises the level of abstraction so you don&#x27;t need to deal with messy hardware, configuration selection remains hardware-adjacent. This is because performance still depends on choosing tile and launch parameters that fit the workload and target GPU. Common parameters include <code>BM</code>, <code>BN</code>, <code>BK</code>, <code>num_warps</code>, and <code>num_stages</code>.</p>
+<p>There are two common ways to select configurations:</p>
+<h4 id="1-autotune" class="anchored"><a class="anchor" href="#1-autotune" aria-label="Link to this section">#</a>1. <a href="https://triton-lang.org/main/python-api/generated/triton.autotune.html" target="_blank" rel="noopener">autotune</a></h4>
+<p>The first uses <code>@triton.autotune</code> with a list of <code>triton.Config</code> objects.</p>
+<p>Each configuration can set compile-time keyword arguments such as block sizes, along with launch options such as <code>num_warps</code>, <code>num_stages</code>, and <code>num_ctas</code>. See the <a href="https://triton-lang.org/main/python-api/generated/triton.Config.html" target="_blank" rel="noopener"><code>triton.Config</code> documentation</a> for the full list.</p>
+<p>For example, a kernel can use autotuning like this:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span><span>20</span><span>21</span></div><div class="code-scroll"><pre><code>autotune_configs = [
+    <span class="t-b">triton</span>.Config({<span class="t-s">&quot;BM&quot;</span>: <span class="t-n">128</span>, <span class="t-s">&quot;BN&quot;</span>: <span class="t-n">256</span>, \
+    <span class="t-s">&quot;BK&quot;</span>: <span class="t-n">64</span>}, num_stages=<span class="t-n">3</span>, num_warps=<span class="t-n">8</span>),
+    <span class="t-b">triton</span>.Config({<span class="t-s">&quot;BM&quot;</span>: <span class="t-n">64</span>, <span class="t-s">&quot;BN&quot;</span>: <span class="t-n">256</span>, \
+    <span class="t-s">&quot;BK&quot;</span>: <span class="t-n">32</span>}, num_stages=<span class="t-n">4</span>, num_warps=<span class="t-n">4</span>),
+    <span class="t-c"># ...</span>
+]
+
+<span class="t-d">@triton.autotune</span>(configs=autotune_configs, key=[<span class="t-s">&quot;M&quot;</span>, <span class="t-s">&quot;N&quot;</span>, <span class="t-s">&quot;K&quot;</span>])
+<span class="t-d">@triton.jit</span>
+<span class="t-k">def</span> <span class="t-f">_matmul_kernel</span>(
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    stride_a_m, stride_a_k,
+    stride_b_k, stride_b_n,
+    stride_c_m, stride_c_n,
+    <span class="t-c"># meta-parameters</span>
+    BM: <span class="t-b">tl</span>.constexpr, BN: <span class="t-b">tl</span>.constexpr, \
+    BK: <span class="t-b">tl</span>.constexpr,
+):
+    ...</code></pre></div></div></figure>
+<p>Exhaustively testing every possible configuration can take a long time. In practice, we provide a bounded set of plausible candidates. For larger search spaces, Triton can prune candidates through <code>prune_configs_by</code>, while <code>@triton.heuristics</code> or manual lookup tables can avoid runtime tuning when compilation and cold-start latency matter.</p>
+<p>The <code>key</code> parameter in <code>@triton.autotune()</code> defines the runtime values that identify a tuning problem. Whenever one or more of those key values change, Triton evaluates the candidate configurations for the new key and caches the result.</p>
+<h4 id="2-manual-lookup-tables-or-heuristics" class="anchored"><a class="anchor" href="#2-manual-lookup-tables-or-heuristics" aria-label="Link to this section">#</a>2. Manual Lookup Tables or <a href="https://triton-lang.org/main/python-api/generated/triton.heuristics.html" target="_blank" rel="noopener">Heuristics</a></h4>
+<p>Although autotuning flexibly covers different shapes and dtypes, heuristics can sometimes select configurations with less runtime overhead.</p>
+<p>Manual lookup tables or heuristics can be keyed on shape, dtype, device, and feature flags. They are useful in latency-sensitive inference serving, where runtime autotuning and compilation overhead matter.</p>
+<h3 id="a-few-more-triton-operations" class="anchored"><a class="anchor" href="#a-few-more-triton-operations" aria-label="Link to this section">#</a>A few more Triton operations</h3>
+<h4 id="tlwhere" class="anchored"><a class="anchor" href="#tlwhere" aria-label="Link to this section">#</a><code>tl.where</code></h4>
+<p>If the matmul fuses an activation such as <a href="https://en.wikipedia.org/wiki/Rectified_linear_unit" target="_blank" rel="noopener">ReLU</a>, <code>tl.where</code> can be used as a per-element if-else on the output tile:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span></div><div class="code-scroll"><pre><code>c = <span class="t-b">tl</span>.where(accumulator &gt; <span class="t-n">0.0</span>, accumulator, <span class="t-n">0.0</span>)</code></pre></div></div></figure>
+<p>Both value branches of <code>tl.where</code> are evaluated, as noted in <a href="https://triton-lang.org/main/python-api/generated/triton.language.where.html" target="_blank" rel="noopener">the API documentation</a>. Use masks on <code>tl.load</code> and <code>tl.store</code>, rather than <code>tl.where</code>, when a branch would otherwise perform an unsafe memory access.</p>
+<h4 id="axis-0-and-axis-1" class="anchored"><a class="anchor" href="#axis-0-and-axis-1" aria-label="Link to this section">#</a>Axis = 0 and Axis = 1</h4>
+<p>The <code>axis</code> argument identifies the dimension to reduce, and that dimension is removed from the result. For a two-dimensional tensor shaped <code>[B0, B1]</code>, reducing along <code>axis=0</code> produces <code>[B1]</code>, while reducing along <code>axis=1</code> produces <code>[B0]</code>.</p>
+<p><strong>Example</strong></p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">plaintext</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span></div><div class="code-scroll"><pre><code>k = [
+  [1, 2, 3, 4],
+  [10, 20, 30, 40],
+]</code></pre></div></div></figure>
+<div class="figure" data-figure><iframe src="assets/01/diagrams/10-reduce-axis.html?v=57" title="Reducing along an axis" height="345" loading="lazy" scrolling="no"></iframe></div>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span></div><div class="code-scroll"><pre><code><span class="t-b">tl</span>.<span class="t-b">sum</span>(k, axis=<span class="t-n">1</span>)</code></pre></div></div></figure>
+<p>sums each row across columns:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">plaintext</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span></div><div class="code-scroll"><pre><code>[1+2+3+4, 10+20+30+40]
+= [10, 100]</code></pre></div></div></figure>
+<p>So it turns <code>[B0, B1]</code> into <code>[B0]</code>.</p>
+<h2 id="testing" class="anchored"><a class="anchor" href="#testing" aria-label="Link to this section">#</a>Testing</h2>
+<p>Correctness comes before performance. Before benchmarking a Triton kernel, test it against a trusted reference implementation, typically PyTorch.</p>
+<p>Try testing with:</p>
+<ul><li>A representative shape.</li><li>A shape that is not divisible by the tile size, to verify the tail masks.</li><li>Every dtype and memory layout that the kernel claims to support.</li></ul>
+<h3 id="example-3" class="anchored"><a class="anchor" href="#example-3" aria-label="Link to this section">#</a>Example</h3>
+<p>For example, a matmul test should use <code>M</code>, <code>N</code>, and <code>K</code> independently instead of testing only square matrices.</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span><span>20</span><span>21</span><span>22</span></div><div class="code-scroll"><pre><code><span class="t-k">def</span> <span class="t-f">test_matmul</span>(M, N, K):
+    <span class="t-b">torch</span>.manual_seed(<span class="t-n">0</span>)
+    a = <span class="t-b">torch</span>.randn((M, K), device=DEVICE, dtype=<span class="t-b">torch</span>.float16)
+    b = <span class="t-b">torch</span>.randn((K, N), device=DEVICE, dtype=<span class="t-b">torch</span>.float16)
+
+    actual = matmul(a, b)
+    expected = <span class="t-b">torch</span>.matmul(a, b)
+
+    <span class="t-b">torch</span>.testing.assert_close(
+        actual,
+        expected,
+        atol=<span class="t-n">1e-2</span>,
+        rtol=<span class="t-n">1e-2</span>,
+    )
+
+<span class="t-k">if</span> __name__ == <span class="t-s">&quot;__main__&quot;</span>:
+    <span class="t-k">for</span> shape <span class="t-k">in</span> [
+        (<span class="t-n">128</span>, <span class="t-n">128</span>, <span class="t-n">128</span>),  <span class="t-c"># regular tiles</span>
+        (<span class="t-n">1</span>, <span class="t-n">17</span>, <span class="t-n">33</span>),      <span class="t-c"># small problem</span>
+        (<span class="t-n">127</span>, <span class="t-n">65</span>, <span class="t-n">129</span>),   <span class="t-c"># partial tiles on every axis</span>
+    ]:
+        test_matmul(*shape)</code></pre></div></div></figure>
+<p><code>torch.testing.assert_close()</code> checks both absolute and relative error:</p>
+<ul><li><code>atol</code> is the allowed absolute difference, which matters for values near zero.</li><li><code>rtol</code> scales the allowed difference relative to the expected value.</li></ul>
+<p>We keep both <code>atol</code> and <code>rtol</code> because Triton and PyTorch may evaluate operations in a different order or at different intermediate precisions, producing small numerical differences.</p>
+<h2 id="performance-benchmarking" class="anchored"><a class="anchor" href="#performance-benchmarking" aria-label="Link to this section">#</a>Performance Benchmarking</h2>
+<p>Once the kernel passes its tests, we can compare it against a meaningful baseline using the same shapes, dtypes, and device.</p>
+<p>GPU work is asynchronous, so timing a launch with a normal CPU timer can measure only the time required to enqueue the work. <a href="https://triton-lang.org/main/python-api/generated/triton.testing.do_bench.html" target="_blank" rel="noopener">triton.testing.do_bench</a> performs warmup and repeated GPU timing and returns the runtime in milliseconds.</p>
+<p><strong>Example</strong></p>
+<p>Here is a compact benchmark for matrix multiplication:</p>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span><span>20</span><span>21</span><span>22</span><span>23</span><span>24</span><span>25</span><span>26</span><span>27</span><span>28</span><span>29</span><span>30</span><span>31</span><span>32</span><span>33</span><span>34</span><span>35</span><span>36</span><span>37</span><span>38</span><span>39</span></div><div class="code-scroll"><pre><code><span class="t-k">def</span> <span class="t-f">benchmark_matmul</span>(M, N, K):
+    a = <span class="t-b">torch</span>.randn((M, K), device=DEVICE, dtype=<span class="t-b">torch</span>.float16)
+    b = <span class="t-b">torch</span>.randn((K, N), device=DEVICE, dtype=<span class="t-b">torch</span>.float16)
+
+    <span class="t-c"># Check correctness and trigger compilation before reporting performance.</span>
+    <span class="t-b">torch</span>.testing.assert_close(
+        matmul(a, b),
+        <span class="t-b">torch</span>.matmul(a, b),
+        atol=<span class="t-n">1e-2</span>,
+        rtol=<span class="t-n">1e-2</span>,
+    )
+
+    triton_ms = <span class="t-b">triton</span>.testing.do_bench(
+        <span class="t-k">lambda</span>: matmul(a, b),
+        return_mode=<span class="t-s">&quot;median&quot;</span>,
+    )
+    torch_ms = <span class="t-b">triton</span>.testing.do_bench(
+        <span class="t-k">lambda</span>: <span class="t-b">torch</span>.matmul(a, b),
+        return_mode=<span class="t-s">&quot;median&quot;</span>,
+    )
+
+    <span class="t-c"># A matrix multiplication performs approximately 2 * M * N * K FLOPs.</span>
+    flops = <span class="t-n">2</span> * M * N * K
+    to_tflops = <span class="t-k">lambda</span> ms: flops / (ms * <span class="t-n">1e-3</span>) / <span class="t-n">1e12</span>
+
+    <span class="t-b">print</span>(
+        f<span class="t-s">&quot;shape=({M}, {N}, {K}) | &quot;</span>
+        f<span class="t-s">&quot;Triton={to_tflops(triton_ms):6.1f} TFLOP/s | &quot;</span>
+        f<span class="t-s">&quot;PyTorch={to_tflops(torch_ms):6.1f} TFLOP/s&quot;</span>
+    )
+
+<span class="t-k">if</span> __name__ == <span class="t-s">&quot;__main__&quot;</span>:
+    <span class="t-k">for</span> shape <span class="t-k">in</span> [
+        (<span class="t-n">256</span>, <span class="t-n">256</span>, <span class="t-n">256</span>),
+        (<span class="t-n">512</span>, <span class="t-n">512</span>, <span class="t-n">512</span>),
+        (<span class="t-n">1024</span>, <span class="t-n">1024</span>, <span class="t-n">1024</span>),
+        (<span class="t-n">1025</span>, <span class="t-n">769</span>, <span class="t-n">513</span>),  <span class="t-c"># irregular dimensions</span>
+    ]:
+        benchmark_matmul(*shape)</code></pre></div></div></figure>
+<p><strong>Latency (<code>ms</code> or <code>µs</code>)</strong> is the clearest metric for small operations. <strong>Throughput (<code>TFLOP/s</code>)</strong> reports how quickly the matrix multiplication&#x27;s floating-point work completes.</p>
+<p>For a larger shape sweep with tables and plots, Triton also provides <a href="https://triton-lang.org/main/python-api/generated/triton.testing.Benchmark.html" target="_blank" rel="noopener">triton.testing.Benchmark</a> and <a href="https://triton-lang.org/main/python-api/generated/triton.testing.perf_report.html" target="_blank" rel="noopener">triton.testing.perf_report</a>.</p>
+<h2 id="debugging" class="anchored"><a class="anchor" href="#debugging" aria-label="Link to this section">#</a>Debugging</h2>
+<figure class="code code--code"><figcaption><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="lang">python</span><button class="copy" type="button" data-copy>Copy</button></figcaption><div class="code-body"><div class="gutter" aria-hidden="true"><span>1</span><span>2</span></div><div class="code-scroll"><pre><code><span class="t-k">import</span> <span class="t-b">os</span>
+<span class="t-b">os</span>.environ[<span class="t-s">&quot;TRITON_INTERPRET&quot;</span>] = <span class="t-s">&quot;1&quot;</span></code></pre></div></div></figure>
+<p><a href="https://triton-lang.org/main/programming-guide/chapter-3/debugging.html" target="_blank" rel="noopener">Interpreter mode</a> simulates Triton programs sequentially on the CPU using NumPy equivalents, which makes intermediate values inspectable with Python <code>print()</code> or <code>pdb</code>.</p>
+<p>Because programs execute sequentially on the CPU, interpreter mode does not reproduce GPU parallelism, scheduling, or performance and should not be used for benchmarking. It also has unsupported cases, including operations on <code>bfloat16</code> values and indirect memory-access patterns. Use it to inspect correctness, then test the kernel on the target GPU as well.</p>
+<h2 id="wrapping-up" class="anchored"><a class="anchor" href="#wrapping-up" aria-label="Link to this section">#</a>Wrapping Up</h2>
+<p>This was a friendly introduction to Triton. Before finishing this note, let&#x27;s review the core ideas:</p>
+<ol><li>A Triton program is one instance of a compiled kernel. It owns one tile, or sometimes a sequence of tiles, loads the corresponding values, computes on them, and stores its outputs.</li><li><code>grid</code> defines how many programs launch along each axis. For example, <code>(1, 1, 1)</code> launches one program, while <code>(3, 2, 1)</code> launches six. In the latter grid, <code>tl.program_id(0)</code> ranges from <code>0</code> to <code>2</code>, and <code>tl.program_id(1)</code> ranges from <code>0</code> to <code>1</code>.</li><li>Most non-persistent kernels map one program to one logical output tile. Persistent kernels may assign several tiles to each program. See <a href="#optional-when-one-program-processes-multiple-tiles" target="_blank" rel="noopener">when one program processes multiple tiles</a>.</li><li>Each program uses its program ID to identify the tile it contributes to the output tensor.</li><li>Before loading data, a program determines which logical tensor elements it owns and maps those coordinates to memory pointers.</li><li>As a practical rule of thumb, expressions derived from program IDs, block coordinates, <code>tl.arange()</code>, and strides usually calculate indices, memory offsets, or pointers. The actual tensor values are obtained by reading from those locations with <code>tl.load()</code>, and computations on the data typically follow.</li></ol>
+    </article>
+
+  </main>
+</div>
+
+<button class="totop" id="totop" type="button" aria-label="Back to top">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6 12l6-6 6 6"/></svg>
+</button>
+
+<script src="site/blog.js?v=57" defer></script>
+</body>
+</html>

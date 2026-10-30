@@ -1,0 +1,179 @@
+<!doctype html>
+<!-- fig-height: 454 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Strided pointer</title>
+<link rel="stylesheet" href="ds.css?v=13">
+<script src="ds.js?v=10" defer></script>
+<style>
+  .stage{display:flex;}
+  .track{width:max-content; max-width:100%;}
+  .row{margin-bottom:var(--s6);}
+  .row > .tag{display:block; margin-bottom:var(--s3);}
+
+  .mat{display:grid; gap:4px; width:max-content;}
+  .c{
+    position:relative;
+    width:58px; height:42px; border-radius:4px;
+    background:var(--inset); border:1px solid var(--rule);
+    display:grid; place-items:center; cursor:pointer;
+    font-family:var(--mono); font-size:12px; color:var(--ink-3);
+    font-variant-numeric:tabular-nums;
+    transition:background .22s var(--ease), border-color .22s var(--ease), color .22s var(--ease);
+  }
+  .c:hover{border-color:var(--ink-3); color:var(--ink);}
+  .c.on{background:var(--accent); border-color:var(--accent); color:var(--panel);}
+
+  .c.step1{background:var(--accent-wash); border-color:var(--accent); color:var(--accent-ink);}
+
+  .c.step0{background:var(--alt-wash); border-color:var(--alt); color:var(--alt);}
+  .c .badge{
+    position:absolute; top:-8px; right:-8px;
+    font-size:9px; padding:1px 4px; border-radius:8px;
+    font-family:var(--mono); line-height:1.5;
+    background:var(--panel); border:1px solid currentColor;
+  }
+
+  .tape{display:grid; gap:3px; width:max-content;}
+  .t{
+    width:28px; height:30px; border-radius:3px;
+    background:var(--inset); border:1px solid transparent;
+    display:grid; place-items:center;
+    font-family:var(--mono); font-size:10px; color:var(--ink-3);
+    font-variant-numeric:tabular-nums;
+    transition:background .22s var(--ease), border-color .22s var(--ease), color .22s var(--ease);
+  }
+  .t.on{background:var(--accent); color:var(--panel); border-color:var(--accent);}
+  .t.step1{background:var(--accent-wash); border-color:var(--accent); color:var(--accent-ink);}
+  .t.step0{background:var(--alt-wash); border-color:var(--alt); color:var(--alt);}
+  .t.brk{box-shadow:-2px 0 0 0 var(--rule-2);}
+
+  .strides{display:flex; gap:var(--s5); flex-wrap:wrap; margin-top:var(--s3);}
+  .st{
+    display:flex; align-items:center; gap:var(--s2);
+    font-family:var(--mono); font-size:11.5px; color:var(--ink-2);
+    padding:5px var(--s3); border-radius:3px;
+    border:1px solid var(--rule); background:var(--inset);
+  }
+  .st .dot{width:9px; height:9px; border-radius:2px; flex:none;}
+  .st.a0 .dot{background:var(--alt);}
+  .st.a1 .dot{background:var(--accent);}
+  .st b{font-weight:600; color:var(--ink);}
+  .st .jump{color:var(--ink-3);}
+
+  .maths{margin-top:var(--s3); font-family:var(--mono); font-size:13.5px; color:var(--ink-2);}
+  .maths em{font-style:normal; color:var(--accent-ink);}
+</style>
+</head>
+<body>
+<div class="fig">
+  <div class="fig-head">
+    <div class="fig-label">offset = row&times;stride_0 + col&times;stride_1</div>
+    <div class="ctl-row hint">
+      <button class="ghost" id="prev" aria-label="Previous element">
+        <svg viewBox="0 0 10 10"><path d="M7 0.5 2 5l5 4.5z"/></svg>
+      </button>
+      <button class="ghost" id="play" aria-label="Pause"><svg viewBox="0 0 10 10" id="icon"></svg></button>
+      <button class="ghost" id="next" aria-label="Next element">
+        <svg viewBox="0 0 10 10"><path d="M3 0.5 8 5l-5 4.5z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="track">
+      <div class="row">
+        <span class="tag">what you index &mdash; (row, col)</span>
+        <div class="mat" id="mat"></div>
+        <div class="strides">
+          <span class="st a0"><span class="dot"></span>axis 0 &mdash; down one row &nbsp;<b id="s0">+6</b><span class="jump" id="s0j"></span></span>
+          <span class="st a1"><span class="dot"></span>axis 1 &mdash; right one col &nbsp;<b id="s1">+1</b><span class="jump" id="s1j"></span></span>
+        </div>
+      </div>
+      <div class="row">
+        <span class="tag">memory is flat</span>
+        <div class="tape" id="tape"></div>
+        <div class="maths" id="maths"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var ROWS=4, COLS=6, S0=COLS, S1=1;
+  var state={ sel:8, playing:true, timer:null };
+
+  var mat=document.getElementById('mat'), tape=document.getElementById('tape'),
+      maths=document.getElementById('maths'),
+      play=document.getElementById('play'), icon=document.getElementById('icon');
+  var PLAY='<path d="M2 0.5v9l7-4.5z"/>', PAUSE='<rect x="1" y="0.5" width="2.6" height="9"/><rect x="6.4" y="0.5" width="2.6" height="9"/>';
+
+  document.getElementById('s0').textContent='+'+S0;
+  document.getElementById('s1').textContent='+'+S1;
+
+  mat.style.gridTemplateColumns='repeat('+COLS+',auto)';
+  tape.style.gridTemplateColumns='repeat('+(ROWS*COLS)+',auto)';
+
+  var cells=[], tapes=[];
+  for(var i=0;i<ROWS*COLS;i++){
+    var r=Math.floor(i/COLS), c=i%COLS;
+    var d=document.createElement('div');
+    d.className='c'; d.innerHTML='<span class="lbl">'+r+','+c+'</span>';
+    d.setAttribute('role','button'); d.setAttribute('tabindex','0');
+    d.setAttribute('aria-label','row '+r+' column '+c);
+    (function(k){
+      d.addEventListener('click',function(){ stop(); state.sel=k; paint(); });
+      d.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){e.preventDefault(); stop(); state.sel=k; paint();} });
+    })(i);
+    mat.appendChild(d); cells.push(d);
+
+    var t=document.createElement('div');
+    t.className='t'+(c===0&&i>0?' brk':''); t.textContent=i;
+    tape.appendChild(t); tapes.push(t);
+  }
+
+  function paint(){
+    var i=state.sel, r=Math.floor(i/COLS), c=i%COLS, off=r*S0+c*S1;
+    var n1 = i+1<ROWS*COLS ? i+1 : -1;
+    var n0 = r+1<ROWS ? i+COLS : -1;
+
+    for(var k=0;k<cells.length;k++){
+      var cell=cells[k], tp=tapes[k];
+      cell.className='c'+(k===i?' on':(k===n1?' step1':(k===n0?' step0':'')));
+      var badge=cell.querySelector('.badge'); if(badge) badge.remove();
+      if(k===n1||k===n0){
+        var b=document.createElement('span');
+        b.className='badge'; b.textContent=(k===n1?'+'+S1:'+'+S0);
+        cell.appendChild(b);
+      }
+      var toff=k;
+      tp.className='t'+(c===0&&k>0&&k%COLS===0?' brk':'')+
+        (toff===off?' on':(n1>=0&&toff===n1?' step1':(n0>=0&&toff===n0?' step0':'')));
+    }
+    for(var m=0;m<tapes.length;m++) if(m%COLS===0&&m>0) tapes[m].classList.add('brk');
+
+    document.getElementById('s0j').textContent = n0>=0 ? ' → '+n0 : ' → edge';
+    document.getElementById('s1j').textContent = n1>=0 ? ' → '+n1 : ' → edge';
+
+    maths.innerHTML='<em>'+r+'</em>&times;'+S0+' + <em>'+c+'</em>&times;'+S1+' = <em>'+off+'</em>';
+  }
+
+  function stop(){ state.playing=false; clearInterval(state.timer); icon.innerHTML=PLAY; play.setAttribute('aria-label','Play'); }
+  function start(){
+    state.playing=true; icon.innerHTML=PAUSE; play.setAttribute('aria-label','Pause');
+    clearInterval(state.timer);
+    state.timer=setInterval(function(){ state.sel=(state.sel+1)%(ROWS*COLS); paint(); },700);
+  }
+  play.addEventListener('click',function(){ state.playing?stop():start(); });
+  document.getElementById('next').addEventListener('click',function(){ stop(); state.sel=(state.sel+1)%(ROWS*COLS); paint(); });
+  document.getElementById('prev').addEventListener('click',function(){ stop(); state.sel=(state.sel-1+ROWS*COLS)%(ROWS*COLS); paint(); });
+
+  paint();
+  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches){ stop(); } else { start(); }
+})();
+</script>
+</body>
+</html>

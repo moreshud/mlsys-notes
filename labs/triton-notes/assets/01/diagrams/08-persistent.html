@@ -1,0 +1,173 @@
+<!doctype html>
+<!-- fig-height: 290 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Persistent programs</title>
+<link rel="stylesheet" href="ds.css?v=13">
+<script src="ds.js?v=10" defer></script>
+<style>
+  .stage{display:flex; gap:var(--s6); align-items:flex-start; flex-wrap:wrap;}
+  .track{flex:1 1 470px; min-width:340px;}
+  .row{margin-bottom:var(--s5);}
+  .row > .tag{display:block; margin-bottom:var(--s2);}
+
+  .tiles{display:grid; gap:3px;}
+  .t{
+    height:38px; border-radius:3px;
+    background:var(--inset); border:1px solid var(--rule);
+    display:grid; place-items:center;
+    font-family:var(--mono); font-size:11px; color:var(--ink-3);
+    font-variant-numeric:tabular-nums;
+    transition:background .3s var(--ease), border-color .3s var(--ease), color .3s var(--ease), opacity .3s var(--ease);
+  }
+  .t.mine{background:var(--accent-wash); border-color:var(--accent); color:var(--accent-ink);}
+  .t.mine.now{background:var(--accent); border-color:var(--accent); color:var(--panel);}
+  .t.other{opacity:.4;}
+
+  .owners{display:grid; gap:3px; margin-top:var(--s1);}
+  .ow{
+    height:15px; border-radius:2px;
+    display:grid; place-items:center;
+    font-family:var(--mono); font-size:9px; color:var(--ink-3);
+    background:var(--inset);
+    transition:background .3s var(--ease), color .3s var(--ease), opacity .3s var(--ease);
+  }
+  .ow.mine{background:var(--accent-wash-2); color:var(--accent-ink);}
+  .ow.other{opacity:.4;}
+
+  .pids{display:flex; gap:var(--s1); flex-wrap:wrap;}
+  .pid{
+    font-family:var(--mono); font-size:11.5px;
+    padding:5px 11px; border-radius:3px; cursor:pointer;
+    background:transparent; border:1px solid var(--rule-2); color:var(--ink-3);
+    transition:background .2s, border-color .2s, color .2s;
+  }
+  .pid:hover{color:var(--ink);}
+  .pid[aria-pressed="true"]{background:var(--accent-wash); border-color:var(--accent); color:var(--accent-ink);}
+
+  .side{flex:0 1 250px; min-width:220px;}
+</style>
+</head>
+<body>
+<div class="fig">
+  <div class="fig-head">
+    <div class="fig-label">for tile_id in range(pid, num_tiles, num_programs)</div>
+    <div class="ctl-row">
+      <div class="ctl">
+        <span class="k">num_programs</span>
+        <input type="range" class="hint" id="npR" min="1" max="8" step="1" value="4">
+        <span class="val" id="npV">4</span>
+      </div>
+      <button class="ghost" id="play" aria-label="Pause"><svg viewBox="0 0 10 10" id="icon"></svg></button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="track">
+      <div class="row">
+        <span class="tag" id="tilesTag"></span>
+        <div class="tiles" id="tiles"></div>
+        <div class="owners" id="owners"></div>
+      </div>
+      <div class="row">
+        <span class="tag">follow one program</span>
+        <div class="pids" id="pids"></div>
+      </div>
+    </div>
+    <div class="side">
+      <div class="read" id="read"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var NTILES=16;
+  var state={ np:4, pid:0, step:0, playing:true, timer:null };
+
+  var tiles=document.getElementById('tiles'), owners=document.getElementById('owners'),
+      pids=document.getElementById('pids'), read=document.getElementById('read'),
+      tilesTag=document.getElementById('tilesTag'),
+      npR=document.getElementById('npR'), npV=document.getElementById('npV'),
+      play=document.getElementById('play'), icon=document.getElementById('icon');
+  var PLAY='<path d="M2 0.5v9l7-4.5z"/>', PAUSE='<rect x="1" y="0.5" width="2.6" height="9"/><rect x="6.4" y="0.5" width="2.6" height="9"/>';
+
+  tiles.style.gridTemplateColumns='repeat('+NTILES+',1fr)';
+  owners.style.gridTemplateColumns='repeat('+NTILES+',1fr)';
+  var tEls=[], oEls=[];
+  for(var i=0;i<NTILES;i++){
+    var d=document.createElement('div'); d.className='t'; d.textContent=i;
+    tiles.appendChild(d); tEls.push(d);
+    var o=document.createElement('div'); o.className='ow';
+    owners.appendChild(o); oEls.push(o);
+  }
+
+  function fmt(a){
+    return a.length<=6 ? a.join(', ')
+                       : a.slice(0,5).join(', ')+' … '+a[a.length-1];
+  }
+
+  function owned(pid){
+    var a=[]; for(var i=pid;i<NTILES;i+=state.np) a.push(i);
+    return a;
+  }
+
+  function buildPids(){
+    pids.innerHTML='';
+    for(var p=0;p<state.np;p++){
+      var b=document.createElement('button');
+      b.className='pid'; b.textContent='pid '+p;
+      b.setAttribute('aria-pressed', String(p===state.pid));
+      (function(k){ b.addEventListener('click',function(){ state.pid=k; state.step=0; paint(); }); })(p);
+      pids.appendChild(b);
+    }
+  }
+
+  function paint(){
+    var mine=owned(state.pid);
+    if(state.step>=mine.length) state.step=0;
+    var now=mine[state.step];
+
+    for(var i=0;i<NTILES;i++){
+      var isMine=mine.indexOf(i)>=0;
+      tEls[i].className='t'+(isMine?' mine'+(i===now?' now':''):' other');
+      oEls[i].className='ow'+(isMine?' mine':' other');
+      oEls[i].textContent=i%state.np;
+    }
+
+    tilesTag.textContent=NTILES+' tiles of work — '+state.np+' program'+(state.np>1?'s':'')+' launched';
+    Array.prototype.forEach.call(pids.children,function(b,k){ b.setAttribute('aria-pressed', String(k===state.pid)); });
+
+    read.innerHTML=
+      '<div class="r"><span class="rk">tiles</span><span class="rv">'+NTILES+'</span></div>'+
+      '<div class="r"><span class="rk">programs</span><span class="rv"><em>'+state.np+'</em></span></div>'+
+      '<div class="r"><span class="rk">pid '+state.pid+'</span><span class="rv"><em>'+mine.length+'</em> tile'+(mine.length>1?'s':'')+'</span></div>'+
+      '<div class="r"><span class="rk">its tiles</span><span class="rv">'+fmt(mine)+'</span></div>'+
+      '<div class="r"><span class="rk">on tile</span><span class="rv"><em>'+now+'</em></span></div>';
+  }
+
+  npR.addEventListener('input',function(){
+    state.np=parseInt(npR.value,10); npV.textContent=state.np;
+    if(state.pid>=state.np) state.pid=state.np-1;
+    state.step=0; buildPids(); paint();
+  });
+
+  function stop(){ state.playing=false; clearInterval(state.timer); icon.innerHTML=PLAY; play.setAttribute('aria-label','Play'); }
+  function start(){
+    state.playing=true; icon.innerHTML=PAUSE; play.setAttribute('aria-label','Pause');
+    clearInterval(state.timer);
+    state.timer=setInterval(function(){
+      state.step=(state.step+1)%owned(state.pid).length; paint();
+    },900);
+  }
+  play.addEventListener('click',function(){ state.playing?stop():start(); });
+
+  npR.value=state.np; npV.textContent=state.np;
+  buildPids(); paint();
+  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches){ stop(); } else { start(); }
+})();
+</script>
+</body>
+</html>

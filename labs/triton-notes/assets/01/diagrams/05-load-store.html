@@ -1,0 +1,147 @@
+<!doctype html>
+<!-- fig-height: 390 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Load and store</title>
+<link rel="stylesheet" href="ds.css?v=13">
+<script src="ds.js?v=10" defer></script>
+<style>
+  .stage{display:flex; gap:var(--s6); align-items:flex-start; flex-wrap:wrap;}
+  .track{flex:1 1 460px; min-width:340px;}
+
+  .mem{position:relative; height:270px;}
+  .zone{
+    position:absolute; left:0; right:0;
+    border:1px solid var(--rule); border-radius:4px;
+    background:var(--inset);
+    transition:border-color .34s var(--ease), background .34s var(--ease);
+  }
+  .zone.live{border-color:var(--accent); background:var(--accent-wash);}
+  .zone .zn{
+    position:absolute; top:var(--s2); left:var(--s3);
+    font-family:var(--mono); font-size:10.5px; letter-spacing:0.1em;
+    text-transform:uppercase; color:var(--ink-3);
+    transition:color .34s var(--ease);
+  }
+  .zone.live .zn{color:var(--accent-ink);}
+  .zone .zs{
+    position:absolute; top:var(--s2); right:var(--s3);
+    font-family:var(--mono); font-size:10px; color:var(--ink-3);
+  }
+
+  #dram{top:196px; height:74px;}
+  #sram{top:96px; height:74px; left:12%; right:12%;}
+  #regs{top:0;   height:70px; left:26%; right:26%;}
+
+  .tile{
+    position:absolute; width:76px; height:30px;
+    border:1.5px solid var(--accent); border-radius:3px;
+    background:var(--panel);
+    display:grid; place-items:center;
+    font-family:var(--mono); font-size:11px; color:var(--accent-ink);
+    transition:top .5s var(--ease), left .5s var(--ease),
+               background .34s var(--ease), border-color .34s var(--ease), color .34s var(--ease);
+    z-index:2;
+  }
+  .tile.hot{background:var(--accent); color:var(--panel); border-color:var(--accent);}
+
+  .rail{
+    position:absolute; left:50%; width:1px; top:34px; bottom:34px;
+    background:repeating-linear-gradient(to bottom, var(--rule-2) 0 3px, transparent 3px 7px);
+    transform:translateX(-50%); z-index:1;
+  }
+
+  .side{flex:0 1 250px; min-width:220px;}
+  .say{
+    font-family:var(--mono); font-size:13px; line-height:1.5; color:var(--ink);
+  }
+  .say .num{color:var(--ink-3); margin-right:var(--s2);}
+  .say em{color:var(--accent-ink); font-style:normal;}
+</style>
+</head>
+<body>
+<div class="fig">
+  <div class="fig-head">
+    <div class="fig-label">tl.load &rarr; compute &rarr; tl.store</div>
+    <div class="ctl-row hint">
+      <button class="ghost" id="prev" aria-label="Previous step">
+        <svg viewBox="0 0 10 10"><path d="M7 0.5 2 5l5 4.5z"/></svg>
+      </button>
+      <button class="ghost" id="play" aria-label="Pause"><svg viewBox="0 0 10 10" id="icon"></svg></button>
+      <button class="ghost" id="next" aria-label="Next step">
+        <svg viewBox="0 0 10 10"><path d="M3 0.5 8 5l-5 4.5z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="track">
+      <div class="mem">
+        <div class="rail"></div>
+        <div class="zone" id="regs"><span class="zn">registers</span><span class="zs">fastest</span></div>
+        <div class="zone" id="sram"><span class="zn">SRAM — shared</span><span class="zs">on-chip</span></div>
+        <div class="zone" id="dram"><span class="zn">DRAM — HBM</span><span class="zs">slowest, largest</span></div>
+        <div class="tile" id="tile">A · B</div>
+      </div>
+    </div>
+    <div class="side">
+      <div class="say" id="say"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var STEPS=[
+    { at:'dram', zone:'dram', hot:false, label:'A · B',
+      say:'A and B are resident in <em>DRAM</em>' },
+    { at:'sram', zone:'sram', hot:false, label:'A, B tiles',
+      say:'load A and B tiles into <em>SRAM</em>' },
+    { at:'regs', zone:'regs', hot:true,  label:'C tile',
+      say:'accumulate A·B in <em>registers</em>' },
+    { at:'dram', zone:'dram', hot:true,  label:'C tile',
+      say:'store the C tile back to <em>DRAM</em>' }
+  ];
+  var N=STEPS.length;
+  var state={ i:0, playing:true, timer:null };
+
+  var tile=document.getElementById('tile'), say=document.getElementById('say'),
+      play=document.getElementById('play'),
+      icon=document.getElementById('icon');
+  var zones={ dram:document.getElementById('dram'), sram:document.getElementById('sram'),
+              regs:document.getElementById('regs') };
+
+  var PLAY='<path d="M2 0.5v9l7-4.5z"/>', PAUSE='<rect x="1" y="0.5" width="2.6" height="9"/><rect x="6.4" y="0.5" width="2.6" height="9"/>';
+
+  function paint(){
+    var s=STEPS[state.i];
+    var z=zones[s.zone];
+    tile.style.top=(z.offsetTop + z.offsetHeight/2 - 15)+'px';
+    tile.style.left=(z.offsetLeft + z.offsetWidth/2 - 38)+'px';
+    tile.textContent=s.label;
+    tile.classList.toggle('hot', s.hot);
+
+    for(var k in zones) zones[k].classList.toggle('live', k===s.zone);
+
+    say.innerHTML='<span class="num">'+(state.i+1)+'.</span>'+s.say;
+  }
+
+  function stop(){ state.playing=false; clearInterval(state.timer); icon.innerHTML=PLAY; play.setAttribute('aria-label','Play'); }
+  function start(){
+    state.playing=true; icon.innerHTML=PAUSE; play.setAttribute('aria-label','Pause');
+    clearInterval(state.timer);
+    state.timer=setInterval(function(){ state.i=(state.i+1)%N; paint(); },1400);
+  }
+  play.addEventListener('click',function(){ state.playing?stop():start(); });
+  document.getElementById('next').addEventListener('click',function(){ stop(); state.i=(state.i+1)%N; paint(); });
+  document.getElementById('prev').addEventListener('click',function(){ stop(); state.i=(state.i-1+N)%N; paint(); });
+
+  paint();
+  window.addEventListener('resize',paint);
+  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches){ stop(); } else { start(); }
+})();
+</script>
+</body>
+</html>
